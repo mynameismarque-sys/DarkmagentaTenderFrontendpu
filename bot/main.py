@@ -149,6 +149,11 @@ class _SafeViewMixin:
                 await interaction.response.send_message(
                     "❌ Ocurrió un error. Intentá de nuevo.", ephemeral=True
                 )
+            else:
+                # Ya fue deferida → usar followup para que el usuario vea el error
+                await interaction.followup.send(
+                    "❌ Ocurrió un error. Intentá de nuevo.", ephemeral=True
+                )
         except Exception:
             pass
 
@@ -6815,7 +6820,7 @@ class ProxyInfoView(_SafeViewMixin, discord.ui.View):
         custom_id="proxy_info_comprar",
     )
     async def btn_comprar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await _safe_defer(interaction, ephemeral=True)
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
         desc = (
             "Elegí el plan de proxy que querés comprar.\n"
             "Tu key llegará por DM al instante una vez confirmado el pago. 🔑"
@@ -6920,7 +6925,7 @@ class ProxyInfoViewSinFree(_SafeViewMixin, discord.ui.View):
         custom_id="proxy_info_comprar",
     )
     async def btn_comprar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await _safe_defer(interaction, ephemeral=True)
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
         desc = (
             "Elegí el plan de proxy que querés comprar.\n"
             "Tu key llegará por DM al instante una vez confirmado el pago. 🔑"
