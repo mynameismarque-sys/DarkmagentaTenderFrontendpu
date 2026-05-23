@@ -3779,9 +3779,10 @@ async def _tarea_diamantes_binance(
             notificar_pago=notificar_pago,
         )
 
-        # Nunca mostrar URLs internas al comprador
+        # Nunca mostrar URLs internas ni el nombre del proveedor al comprador
         import re as _re
         resultado_comprador = _re.sub(r"https?://\S+", "", resultado).strip()
+        resultado_comprador = _re.sub(r"latingm(?:\.com)?", "el proveedor", resultado_comprador, flags=_re.IGNORECASE)
 
         color = 0x2ECC71 if resultado.startswith("✅") else 0xE74C3C
         embed_res = discord.Embed(
@@ -5512,14 +5513,14 @@ async def reenviar_diamantes_cmd(
                 f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
                 f"💎 **Paquete:** {cantidad:,} Diamantes\n"
                 f"🎮 **ID Free Fire:** `{id_freefire}`\n\n"
-                "🔍 Buscando PIN del último pedido en latingm.com..."
+                "🔍 Buscando PIN del último pedido completado..."
             ),
             color=0x3498DB,
         )
         await canal_ventas.send(embed=embed_log)
 
     await interaction.followup.send(
-        f"⏳ Buscando el PIN del pedido de **{cantidad:,} 💎** en latingm.com y canjeando para {usuario.mention}...\n"
+        f"⏳ Buscando el PIN del pedido de **{cantidad:,} 💎** y canjeando para {usuario.mention}...\n"
         "El resultado llegará al usuario por DM y se notificará en #ventas.",
         ephemeral=True,
     )
@@ -5534,8 +5535,8 @@ async def reenviar_diamantes_cmd(
 
             if not pin_encontrado:
                 msg_fallo = (
-                    f"❌ No encontré el PIN del pedido de {cantidad:,} 💎 en latingm.com.\n"
-                    "Puede que el pedido aún no esté completado o el PIN no esté visible."
+                    f"❌ No se pudo procesar tu pedido de {cantidad:,} 💎.\n"
+                    "El pedido puede que aún no esté confirmado. Un admin fue notificado."
                 )
                 try:
                     dm = await usuario.create_dm()
@@ -5552,7 +5553,7 @@ async def reenviar_diamantes_cmd(
                                 f"🎯 **Comprador:** {usuario.mention}\n"
                                 f"💎 **Diamantes:** {cantidad:,}\n"
                                 f"🎮 **ID FF:** `{id_freefire}`\n\n"
-                                "No se encontró el PIN en latingm.com."
+                                "No se encontró el PIN del pedido en el proveedor."
                             ),
                             color=0xE74C3C,
                         ))

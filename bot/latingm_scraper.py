@@ -560,11 +560,11 @@ async def comprar_diamantes(
                 content = await _safe_content(page)
                 if any(kw in content.lower() for kw in _CF_KEYWORDS):
                     return screenshot, (
-                        "❌ **Cloudflare bloqueó el acceso a latingm.com.**\n"
-                        "El servidor de la tienda está detectando el bot. "
-                        "Contactá al admin para verificar las credenciales y el acceso."
+                        "❌ **Acceso bloqueado temporalmente.**\n"
+                        "El servidor está detectando actividad inusual. "
+                        "Contactá al admin para que lo resuelva."
                     )
-                return screenshot, "❌ El login en la tienda falló. Revisá las credenciales (SHOP_USER / SHOP_PASS)."
+                return screenshot, "❌ El acceso al proveedor falló. Contactá al admin."
 
             # Calentar sesión en el home
             log.info("latingm: calentando sesión en home...")
@@ -1342,7 +1342,7 @@ async def completar_pedido_existente(
             ok = await _login(page, shop_user, shop_pass)
             if not ok:
                 screenshot = await page.screenshot()
-                return screenshot, "❌ No pude iniciar sesión en latingm.com."
+                return screenshot, "❌ No pude iniciar sesión en el proveedor."
 
             # ── 2. Ir al pedido específico ────────────────────────────────────
             order_url = f"{LATINGM_URL}mi-cuenta/ver-pedido/{order_id}/"
@@ -1355,7 +1355,7 @@ async def completar_pedido_existente(
             pin = await _extraer_pin_de_pedido(page)
             if not pin:
                 screenshot = await page.screenshot()
-                return screenshot, f"❌ No encontré el PIN en el pedido {order_id}. Puede que el pedido aún no esté completado en latingm."
+                return screenshot, f"❌ No encontré el PIN en el pedido {order_id}. Puede que el pedido aún no esté completado."
 
             log.info("completar_pedido: PIN = %s", pin)
 
