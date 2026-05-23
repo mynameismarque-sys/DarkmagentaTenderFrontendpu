@@ -342,9 +342,16 @@ async def registrar(
 # ---------------------------------------------------------------------------
 @tree.command(
     name="gratismarke",
-    description="Obtené una key gratuita de 3 días para probar el proxy (una sola vez)",
+    description="[Desactivado] Promo gratuita no disponible por el momento",
 )
 async def gratismarke(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True)
+    await interaction.followup.send(
+        "❌ El comando `/gratismarke` está desactivado por el momento.\n"
+        "Usá `/comprar` para adquirir tu plan.",
+        ephemeral=True,
+    )
+    return
     await _safe_defer(interaction, ephemeral=True, thinking=True)
 
     es_admin = _puede_registrar(interaction)
