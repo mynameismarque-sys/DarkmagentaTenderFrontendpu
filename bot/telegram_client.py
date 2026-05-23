@@ -364,15 +364,15 @@ async def _keepalive_loop() -> None:
                     log.info("Telethon keepalive: producción sigue activa — reintentando en %ds.", DUP_RETRY_SECS)
                 except Exception as _dup_exc:
                     # Error distinto a AuthKeyDuplicatedError (p.ej. sesión inválida,
-                    # no autorizada, etc.). Producción ya no tiene la sesión → reset
-                    # para que el bot intente reconectarse normalmente en el próximo ciclo.
+                    # timeout de red, etc.). Logueamos y mantenemos _prod_has_session=True
+                    # para seguir cediendo interacciones a producción — es más seguro
+                    # que crear una ventana donde dev procesa comandos de usuarios.
                     log.warning(
                         "Telethon keepalive: error no-dup en reintento (%s) — "
-                        "reseteando _prod_has_session para reintentar normalmente.",
+                        "manteniendo _prod_has_session=True, reintentando en %ds.",
                         type(_dup_exc).__name__,
+                        DUP_RETRY_SECS,
                     )
-                    _prod_has_session = False
-                    _next_dup_retry   = 0.0
             continue
 
         connected = False
