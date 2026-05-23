@@ -3744,6 +3744,71 @@ async def _handle_diamantes_binance(
     asyncio.create_task(_tarea_diamantes_binance(interaction.user, diamonds, id_freefire))
 
 
+def _parsear_pendiente_manual(resultado: str) -> dict | None:
+    """Extrae pin/id_ff/diamonds de un mensaje PENDIENTE_MANUAL del scraper.
+    Devuelve None si el resultado no es un caso de canje manual pendiente."""
+    if latingm_scraper._PENDIENTE_MANUAL_TAG not in resultado:
+        return None
+    pin_m  = re.search(r"PIN:([^\n]+)", resultado)
+    id_m   = re.search(r"ID:([^\n]+)", resultado)
+    diam_m = re.search(r"DIAM:(\d+)", resultado)
+    return {
+        "pin":      pin_m.group(1).strip()  if pin_m  else "N/A",
+        "id_ff":    id_m.group(1).strip()   if id_m   else "N/A",
+        "diamonds": int(diam_m.group(1))    if diam_m else 0,
+    }
+
+
+async def _dm_alerta_manual_admin(
+    pin: str,
+    id_freefire: str,
+    diamonds: int,
+    comprador: str = "",
+) -> None:
+    """DM a todos los admins + post en #ventas cuando el canje automático falla por reCAPTCHA."""
+    embed = discord.Embed(
+        title="⚠️ CANJE MANUAL REQUERIDO",
+        description=(
+            "El reCAPTCHA bloqueó el canje automático en redeempins.com.\n"
+            "**Canjeá el PIN manualmente** para completar la entrega al comprador."
+        ),
+        color=0xFFA500,
+    )
+    embed.add_field(name="🔑 PIN", value=f"```{pin}```", inline=False)
+    embed.add_field(name="🎮 ID Free Fire", value=f"`{id_freefire}`", inline=True)
+    embed.add_field(name="💎 Diamantes",    value=str(diamonds),       inline=True)
+    if comprador:
+        embed.add_field(name="👤 Comprador", value=comprador, inline=False)
+    embed.set_footer(text="Marke Panel — canje pendiente de resolución manual")
+
+    # DM a todos los admins con ese rol
+    guild = _resolver_guild()
+    if guild and ADMIN_ROLE_ID:
+        try:
+            admin_role = guild.get_role(int(ADMIN_ROLE_ID))
+            if admin_role:
+                for member in admin_role.members:
+                    try:
+                        await member.send(embed=embed)
+                        log.info("_dm_alerta_manual_admin: DM enviado a %s", member)
+                    except Exception:
+                        pass
+        except Exception:
+            log.exception("_dm_alerta_manual_admin: error enviando DMs")
+
+    # Post visible en #ventas
+    try:
+        canal = await _obtener_canal_ventas()
+        if canal:
+            await canal.send(
+                content="@here ⚠️ **CANJE MANUAL REQUERIDO** — revisar embed abajo",
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(everyone=True),
+            )
+    except Exception:
+        log.exception("_dm_alerta_manual_admin: error enviando a #ventas")
+
+
 async def _tarea_diamantes_binance(
     user: discord.User | discord.Member,
     diamonds: int,
@@ -3779,10 +3844,21 @@ async def _tarea_diamantes_binance(
             notificar_pago=notificar_pago,
         )
 
+        # Fallback manual si el reCAPTCHA bloqueó el canje
+        pm = _parsear_pendiente_manual(resultado)
+        if pm:
+            asyncio.create_task(_dm_alerta_manual_admin(
+                pin=pm["pin"], id_freefire=pm["id_ff"],
+                diamonds=pm["diamonds"], comprador=user.mention,
+            ))
+
         # Nunca mostrar URLs internas ni el nombre del proveedor al comprador
         import re as _re
         resultado_comprador = _re.sub(r"https?://\S+", "", resultado).strip()
         resultado_comprador = _re.sub(r"latingm(?:\.com)?", "el proveedor", resultado_comprador, flags=_re.IGNORECASE)
+        # Limpiar el marcador interno del mensaje al comprador
+        resultado_comprador = resultado_comprador.replace(latingm_scraper._PENDIENTE_MANUAL_TAG, "").strip()
+        resultado_comprador = _re.sub(r"(PIN|ID|DIAM):[^\n]+\n?", "", resultado_comprador).strip()
 
         color = 0x2ECC71 if resultado.startswith("✅") else 0xE74C3C
         embed_res = discord.Embed(
@@ -5568,6 +5644,14 @@ async def reenviar_diamantes_cmd(
                 diamonds=cantidad,
             )
             exito = resultado.startswith("✅")
+
+            # Fallback manual si el reCAPTCHA bloqueó el canje
+            pm = _parsear_pendiente_manual(resultado)
+            if pm:
+                asyncio.create_task(_dm_alerta_manual_admin(
+                    pin=pm["pin"], id_freefire=pm["id_ff"],
+                    diamonds=pm["diamonds"], comprador=usuario.mention,
+                ))
 
             # Notificar al usuario por DM
             try:

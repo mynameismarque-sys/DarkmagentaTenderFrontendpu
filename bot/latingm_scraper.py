@@ -1,8 +1,11 @@
 """Automatización Playwright: latingm.com → redeempins.com para diamantes Free Fire."""
 import asyncio
+import json as _json
 import logging
 import os
 import re
+import urllib.parse as _urlparse
+import urllib.request as _urlreq
 from typing import Awaitable, Callable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
@@ -27,6 +30,9 @@ PAQUETES = {
 _PIN_PATTERN = re.compile(
     r'\b[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}\b'
 )
+
+# Marcador especial que main.py detecta para activar el fallback manual
+_PENDIENTE_MANUAL_TAG = "PENDIENTE_MANUAL"
 
 _REDEEMPINS_NOMBRE = "Agustin Nahuel"
 _REDEEMPINS_FECHA  = "11/04/1999"
@@ -505,6 +511,128 @@ async def _insertar_pin_redeempins(page, pin: str) -> bool:
 
     log.warning("_insertar_pin_redeempins: todas las estrategias fallaron para PIN=%s", pin[:20])
     return False
+
+
+async def _resolver_captcha_2captcha(page) -> bool:
+    """
+    Resuelve el reCAPTCHA invisible de redeempins.com usando la API de 2Captcha.
+    Requiere la variable de entorno CAPTCHA_API_KEY.
+    1. Extrae el sitekey del DOM.
+    2. Envía la tarea a 2Captcha.
+    3. Hace polling hasta obtener el token (máx 120 s).
+    4. Inyecta el token en g-recaptcha-response y dispara el callback.
+    Devuelve True si el token fue inyectado, False en cualquier otro caso.
+    """
+    api_key = os.environ.get("CAPTCHA_API_KEY", "").strip()
+    if not api_key:
+        log.info("_resolver_captcha_2captcha: CAPTCHA_API_KEY no configurada — saltando")
+        return False
+
+    # ── 1. Extraer sitekey ────────────────────────────────────────────────────
+    sitekey = None
+    try:
+        sitekey = await page.evaluate("""
+            () => {
+                const el = document.querySelector('[data-sitekey]');
+                if (el) return el.getAttribute('data-sitekey');
+                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
+                    for (const id in window.___grecaptcha_cfg.clients) {
+                        const cl = window.___grecaptcha_cfg.clients[id];
+                        for (const k in cl) {
+                            if (cl[k] && cl[k].sitekey) return cl[k].sitekey;
+                        }
+                    }
+                }
+                return null;
+            }
+        """)
+    except Exception as exc:
+        log.warning("_resolver_captcha_2captcha: error leyendo sitekey: %s", exc)
+        return False
+
+    if not sitekey:
+        log.warning("_resolver_captcha_2captcha: sitekey no encontrado — saltando")
+        return False
+
+    page_url = page.url
+    log.info("_resolver_captcha_2captcha: sitekey=%s url=%s", sitekey, page_url)
+
+    # ── 2. Enviar tarea a 2Captcha ────────────────────────────────────────────
+    try:
+        submit_url = (
+            "https://2captcha.com/in.php"
+            f"?key={api_key}"
+            f"&method=userrecaptcha"
+            f"&googlekey={_urlparse.quote(sitekey)}"
+            f"&pageurl={_urlparse.quote(page_url)}"
+            "&json=1&invisible=1"
+        )
+        with _urlreq.urlopen(submit_url, timeout=20) as resp:
+            data = _json.loads(resp.read())
+        if data.get("status") != 1:
+            log.warning("_resolver_captcha_2captcha: 2Captcha rechazó la tarea: %s", data)
+            return False
+        task_id = data["request"]
+        log.info("_resolver_captcha_2captcha: tarea enviada id=%s", task_id)
+    except Exception as exc:
+        log.warning("_resolver_captcha_2captcha: error enviando a 2Captcha: %s", exc)
+        return False
+
+    # ── 3. Polling (máx 120 s) ────────────────────────────────────────────────
+    token = None
+    for attempt in range(24):          # 24 × 5 s = 120 s
+        await asyncio.sleep(5)
+        try:
+            poll_url = (
+                "https://2captcha.com/res.php"
+                f"?key={api_key}&action=get&id={task_id}&json=1"
+            )
+            with _urlreq.urlopen(poll_url, timeout=15) as resp:
+                data = _json.loads(resp.read())
+            if data.get("status") == 1:
+                token = data["request"]
+                log.info("_resolver_captcha_2captcha: ✅ token obtenido (intento %d)", attempt + 1)
+                break
+            if data.get("request") in ("ERROR_CAPTCHA_UNSOLVABLE", "ERROR_BAD_DUPLICATES"):
+                log.warning("_resolver_captcha_2captcha: captcha irresoluble: %s", data["request"])
+                return False
+            log.debug("_resolver_captcha_2captcha: pendiente intento %d: %s", attempt + 1, data)
+        except Exception as exc:
+            log.warning("_resolver_captcha_2captcha: error polling intento %d: %s", attempt + 1, exc)
+
+    if not token:
+        log.warning("_resolver_captcha_2captcha: timeout — no se obtuvo token en 120 s")
+        return False
+
+    # ── 4. Inyectar token ─────────────────────────────────────────────────────
+    try:
+        await page.evaluate(
+            """(tok) => {
+                document.querySelectorAll(
+                    '[name="g-recaptcha-response"], #g-recaptcha-response'
+                ).forEach(el => {
+                    el.value = tok; el.innerHTML = tok;
+                    try { el.style.display = 'block'; } catch(e) {}
+                });
+                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
+                    for (const id in window.___grecaptcha_cfg.clients) {
+                        const cl = window.___grecaptcha_cfg.clients[id];
+                        for (const k in cl) {
+                            if (cl[k] && typeof cl[k].callback === 'function') {
+                                try { cl[k].callback(tok); } catch(e) {}
+                            }
+                        }
+                    }
+                }
+            }""",
+            token,
+        )
+        await page.wait_for_timeout(600)
+        log.info("_resolver_captcha_2captcha: ✅ token inyectado en la página")
+        return True
+    except Exception as exc:
+        log.warning("_resolver_captcha_2captcha: error inyectando token: %s", exc)
+        return False
 
 
 async def _extraer_pin_de_pedido(page) -> str:
@@ -1229,6 +1357,11 @@ async def comprar_diamantes(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
 
+            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
+            captcha_ok = await _resolver_captcha_2captcha(page)
+            log.info("redeempins: captcha_ok=%s", captcha_ok)
+            await page.wait_for_timeout(500)
+
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",
                 "button:has-text('Redeem')", "button[type='submit']",
@@ -1244,17 +1377,27 @@ async def comprar_diamantes(
                     continue
 
             # Esperar a que aparezca el formulario de paso 2 (Nombre Completo, etc.)
-            # Puede demorar si hay reCAPTCHA o carga lenta
             log.info("redeempins: esperando formulario paso 2...")
+            paso2_ok = False
             try:
                 await page.wait_for_selector(
                     "input[placeholder*='Nombre'], input[placeholder*='nombre'], "
                     "input[name*='name'], input[placeholder*='Nacimiento']",
-                    timeout=20_000,
+                    timeout=25_000,
                 )
+                paso2_ok = True
             except Exception:
-                # Si el selector no aparece, esperar igual y continuar
                 await page.wait_for_timeout(5_000)
+
+            if not paso2_ok:
+                log.warning("redeempins: paso 2 no apareció — reCAPTCHA probablemente bloqueó el envío")
+                screenshot = await page.screenshot()
+                return screenshot, (
+                    f"⚠️ {_PENDIENTE_MANUAL_TAG}\n"
+                    f"PIN:{pin}\nID:{id_freefire}\nDIAM:{diamonds}\n\n"
+                    f"❌ El reCAPTCHA bloqueó el canje automático en redeempins.com.\n"
+                    f"🔑 PIN: `{pin}`\n🎮 ID FF: `{id_freefire}`"
+                )
             log.info("redeempins: formulario paso 2 — URL=%s", page.url)
 
             # ── 16. redeempins.com — Paso 2: completar datos del jugador ─────
@@ -1455,6 +1598,11 @@ async def completar_pedido_existente(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
 
+            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
+            captcha_ok = await _resolver_captcha_2captcha(page)
+            log.info("completar_pedido: captcha_ok=%s", captcha_ok)
+            await page.wait_for_timeout(500)
+
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",
                 "button:has-text('Redeem')", "button[type='submit']",
@@ -1471,14 +1619,26 @@ async def completar_pedido_existente(
 
             # Esperar formulario paso 2
             log.info("completar_pedido: esperando formulario paso 2...")
+            paso2_ok = False
             try:
                 await page.wait_for_selector(
                     "input[placeholder*='Nombre'], input[placeholder*='nombre'], "
                     "input[name*='name'], input[placeholder*='Nacimiento']",
-                    timeout=20_000,
+                    timeout=25_000,
                 )
+                paso2_ok = True
             except Exception:
                 await page.wait_for_timeout(5_000)
+
+            if not paso2_ok:
+                log.warning("completar_pedido: paso 2 no apareció — reCAPTCHA bloqueó el envío")
+                screenshot = await page.screenshot()
+                return screenshot, (
+                    f"⚠️ {_PENDIENTE_MANUAL_TAG}\n"
+                    f"PIN:{pin}\nID:{id_freefire}\nDIAM:{diamonds}\n\n"
+                    f"❌ El reCAPTCHA bloqueó el canje automático en redeempins.com.\n"
+                    f"🔑 PIN: `{pin}`\n🎮 ID FF: `{id_freefire}`"
+                )
 
             # ── 5. redeempins.com — Paso 2 ────────────────────────────────────
             for sel in [
@@ -1771,6 +1931,11 @@ async def canjear_pin_directo(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com.\nPIN: `{pin}`"
 
+            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
+            captcha_ok = await _resolver_captcha_2captcha(page)
+            log.info("canjear_pin_directo: captcha_ok=%s", captcha_ok)
+            await page.wait_for_timeout(500)
+
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",
                 "button:has-text('Redeem')", "button[type='submit']",
@@ -1787,14 +1952,26 @@ async def canjear_pin_directo(
 
             # ── Esperar formulario paso 2 ─────────────────────────────────────
             log.info("canjear_pin_directo: esperando formulario paso 2...")
+            paso2_ok = False
             try:
                 await page.wait_for_selector(
                     "input[placeholder*='Nombre'], input[placeholder*='nombre'], "
                     "input[name*='name'], input[placeholder*='Nacimiento']",
-                    timeout=20_000,
+                    timeout=25_000,
                 )
+                paso2_ok = True
             except Exception:
                 await page.wait_for_timeout(5_000)
+
+            if not paso2_ok:
+                log.warning("canjear_pin_directo: paso 2 no apareció — reCAPTCHA bloqueó el envío")
+                screenshot = await page.screenshot()
+                return screenshot, (
+                    f"⚠️ {_PENDIENTE_MANUAL_TAG}\n"
+                    f"PIN:{pin}\nID:{id_freefire}\nDIAM:{diamonds}\n\n"
+                    f"❌ El reCAPTCHA bloqueó el canje automático en redeempins.com.\n"
+                    f"🔑 PIN: `{pin}`\n🎮 ID FF: `{id_freefire}`"
+                )
             log.info("canjear_pin_directo: formulario paso 2 — URL=%s", page.url)
 
             # ── Paso 2: datos del jugador ─────────────────────────────────────
