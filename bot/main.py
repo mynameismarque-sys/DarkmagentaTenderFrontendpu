@@ -89,7 +89,7 @@ def _en_horario_mp() -> bool:
 # ---------------------------------------------------------------------------
 # Variable de estado global para automatización de Mercado Pago
 # ---------------------------------------------------------------------------
-MODO_AUTO_MP: bool = False
+MODO_AUTO_MP: bool = True
 
 # ID del emoji personalizado de la bandera argentina (se carga en on_ready)
 _ARG_EMOJI_ID: int | None = None
@@ -8667,7 +8667,7 @@ async def deshabilitar_chat_cmd(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     global MODO_AUTO_MP, _ARG_EMOJI_ID
-    MODO_AUTO_MP = database.get_config("MODO_AUTO_MP", "0") == "1"
+    MODO_AUTO_MP = database.get_config("MODO_AUTO_MP", "1") != "0"
     log.info("Bot conectado como %s (id=%s)", client.user, client.user.id)
     log.info("MODO_AUTO_MP cargado desde DB: %s", MODO_AUTO_MP)
 
