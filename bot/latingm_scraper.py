@@ -671,6 +671,7 @@ async def comprar_diamantes(
     diamonds: int,
     id_freefire: str,
     notificar_pago: Callable[[str, str], Awaitable[None]],
+    guardar_pin: Callable[[str, str], None] | None = None,
 ) -> tuple[bytes | None, str]:
     shop_user = os.environ.get("SHOP_USER", "")
     shop_pass = os.environ.get("SHOP_PASS", "")
@@ -1266,6 +1267,16 @@ async def comprar_diamantes(
 
             log.info("latingm: PIN obtenido = %s", pin)
 
+            # ── Persistir el PIN para poder reenviarlo luego si falla el canje ─
+            if guardar_pin:
+                try:
+                    oid_match = __import__("re").search(r'/(?:ver-pedido|view-order)/(\d+)/', page.url)
+                    oid_str = oid_match.group(1) if oid_match else ""
+                    guardar_pin(pin, oid_str)
+                    log.info("latingm: PIN guardado en DB (order_id=%s)", oid_str)
+                except Exception as _gp_exc:
+                    log.warning("latingm: no se pudo guardar PIN: %s", _gp_exc)
+
             # ── 15. redeempins.com — Paso 1: insertar PIN ────────────────────
             await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)
             log.info("redeempins: en formulario paso 1 — URL=%s", page.url)
@@ -1450,6 +1461,7 @@ async def completar_pedido_existente(
     order_id: str,
     id_freefire: str,
     diamonds: int = 110,
+    guardar_pin: Callable[[str, str], None] | None = None,
 ) -> tuple[bytes | None, str]:
     """
     Completa un pedido ya pagado en latingm.com:
@@ -1506,6 +1518,14 @@ async def completar_pedido_existente(
                 return screenshot, f"❌ No encontré el PIN en el pedido {order_id}. Puede que el pedido aún no esté completado."
 
             log.info("completar_pedido: PIN = %s", pin)
+
+            # ── Persistir PIN para posible reenvío posterior ──────────────────
+            if guardar_pin:
+                try:
+                    guardar_pin(pin, order_id)
+                    log.info("completar_pedido: PIN guardado en DB (order_id=%s)", order_id)
+                except Exception as _gp_exc:
+                    log.warning("completar_pedido: no se pudo guardar PIN: %s", _gp_exc)
 
             # ── 4. redeempins.com — Paso 1 ────────────────────────────────────
             await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)

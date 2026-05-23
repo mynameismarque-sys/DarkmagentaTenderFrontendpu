@@ -3830,10 +3830,17 @@ async def _tarea_diamantes_binance(
             log.exception("Error notificando pago Binance en #ventas")
 
     try:
+        def _guardar_pin_cb(p: str, oid: str) -> None:
+            try:
+                database.save_diamond_pin(diamonds, p, oid)
+            except Exception as _exc:
+                log.warning("_guardar_pin_cb: %s", _exc)
+
         screenshot_bytes, resultado = await latingm_scraper.comprar_diamantes(
             diamonds=diamonds,
             id_freefire=id_freefire,
             notificar_pago=notificar_pago,
+            guardar_pin=_guardar_pin_cb,
         )
 
         # Fallback manual si el reCAPTCHA bloqueó el canje
@@ -5618,8 +5625,18 @@ async def reenviar_diamantes_cmd(
         pin_encontrado = pin.strip() if pin else ""
         order_id_encontrado = ""
         try:
-            # ── 1. PIN: usar el manual si fue provisto, si no buscar en latingm ─
+            # ── 1. PIN: manual > DB > latingm.com (en ese orden de prioridad) ──
             if not pin_encontrado:
+                # Primero buscar en la base de datos local (guardado durante la compra)
+                pin_encontrado, order_id_encontrado = await asyncio.to_thread(
+                    database.pop_diamond_pin, cantidad
+                )
+                if pin_encontrado:
+                    log.info("reenviar_diamantes: PIN obtenido de DB local para %d💎 → %s", cantidad, pin_encontrado)
+
+            if not pin_encontrado:
+                # Fallback: scraping en latingm.com
+                log.info("reenviar_diamantes: PIN no en DB, buscando en latingm.com...")
                 pin_encontrado, order_id_encontrado = await latingm_scraper.obtener_pin_de_ultimo_pedido(cantidad)
 
             if not pin_encontrado:

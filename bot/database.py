@@ -187,7 +187,47 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS ix_keys_activations_key ON keys_activations(key)")
+        # PINs de diamantes — se guardan al comprarse para poder reenviarlos luego
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS diamond_pins (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                diamonds   INTEGER NOT NULL,
+                pin        TEXT    NOT NULL,
+                order_id   TEXT    NOT NULL DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
+
+
+def save_diamond_pin(diamonds: int, pin: str, order_id: str = "") -> None:
+    """Persiste el PIN de un pedido de diamantes para uso posterior (reenvío manual)."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO diamond_pins (diamonds, pin, order_id) VALUES (?, ?, ?)",
+            (diamonds, pin.strip(), order_id),
+        )
+        conn.commit()
+
+
+def pop_diamond_pin(diamonds: int) -> tuple[str, str]:
+    """
+    Devuelve y elimina el PIN más reciente para esa cantidad de diamantes.
+    Retorna (pin, order_id) o ("", "") si no hay ninguno guardado.
+    """
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT id, pin, order_id FROM diamond_pins "
+            "WHERE diamonds = ? ORDER BY created_at DESC LIMIT 1",
+            (diamonds,),
+        ).fetchone()
+        if not row:
+            return "", ""
+        conn.execute("DELETE FROM diamond_pins WHERE id = ?", (row["id"],))
+        conn.commit()
+        return row["pin"], row["order_id"]
 
 
 @contextmanager
