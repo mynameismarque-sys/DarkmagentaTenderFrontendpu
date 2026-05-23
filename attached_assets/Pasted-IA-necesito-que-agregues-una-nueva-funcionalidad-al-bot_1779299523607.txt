@@ -1,0 +1,21 @@
+IA, necesito que agregues una nueva funcionalidad al bot de Discord relacionada con un sistema de reclutamiento para influencers y una herramienta de administración de tickets. 
+
+⚠️ ADVERTENCIA CRÍTICA: Bajo ninguna circunstancia debes modificar, alterar, borrar o reescribir NADA del código relacionado con Telegram, Telethon, la sesión de Telethon, o las configuraciones de Proxy que conectan con Telegram. Esa parte del backend está funcionando de manera perfecta y un cambio podría romper las sesiones activas. Solo añade las nuevas funciones de Discord sin tocar el módulo de Telegram.
+
+Requiero que implementes lo siguiente:
+
+1. COMANDO DE ADMINISTRACIÓN: Crea el comando de barra '/cerrarticket'. Cuando un administrador o miembro del Staff con permisos use este comando dentro de un canal de ticket, el bot debe cerrar, guardar un log opcional y eliminar ese canal de ticket. Esto es urgente porque los tickets se quedaron acumulados en el servidor y no se pueden cerrar.
+
+2. INTERFAZ DE POSTULACIÓN (EMBED + BOTÓN):
+Crea un script o comando de inicialización para enviar un Embed fijo al canal de postulaciones. El Embed debe contener detalladamente la siguiente información para los usuarios:
+   - Reclutamiento exclusivo para creadores de contenido de Free Fire que jueguen en iPhone (iOS).
+   - Requisitos: Ser maduro y mayor de 16 años, saber stremear, crear lives dinámicos y divertidos, subir clips y promocionar el link del Discord.
+   - Beneficios: Acceso a una key de proxy de 1 semana, reventa de todos los productos de la tienda y un salario de $30.000 pesos argentinos semanales por cumplir 5 lives de 3 horas cada uno.
+   - Proceso: Previa llamada de entrevista y enviar link de perfil de TikTok.
+
+3. BOTÓN INTERACTIVO ("Postularte"):
+   - Adjunta un botón de color azul o verde al Embed que diga "Postularte".
+   - Al hacer clic en el botón, el bot debe crear un ticket privado automático (ej: 'postulacion-usuario') visible únicamente para el usuario que cliqueó y el rol de Staff/Administración.
+   - Dentro del ticket creado, el bot debe etiquetar al usuario y enviarle un mensaje de bienvenida recordándole que debe mandar su perfil de TikTok para iniciar la entrevista previa por llamada.
+
+Desarrolla estas interacciones asegurando la estabilidad del código actual.

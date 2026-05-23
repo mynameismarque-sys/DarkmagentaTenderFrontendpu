@@ -1,0 +1,25 @@
+Hola. Necesito que modifiques el código de mi bot de Discord (escrito en Python con discord.py) para cambiar la lógica de automatización de ventas usando dos comandos separados: `/mercadoactivar` y `/mercadodesactivar`.
+
+Requisitos específicos para el código:
+
+1. VARIABLE DE ESTADO: Utiliza una variable global (o persistente en base de datos si corresponde) llamada `MODO_AUTO_MP` que controle este estado (True o False).
+
+2. COMANDOS EXCLUSIVOS PARA ADMINS:
+   - Crea el comando `/mercadoactivar`: Al ejecutarse, debe setear `MODO_AUTO_MP = True` y responder con un mensaje efímero: "🟢 Automatización ACTIVADA. Mercado Pago ahora aparecerá como opción de compra junto a Transferencia Bancaria."
+   - Crea el comando `/mercadodesactivar`: Al ejecutarse, debe setear `MODO_AUTO_MP = False` y responder con un mensaje efímero: "🔴 Automatización DESACTIVADA. Mercado Pago ha sido removido de las opciones; ahora los usuarios solo verán la opción de Transferencia o aviso manual."
+   - Ambos comandos deben tener la restricción de seguridad `@app_commands.checks.has_permissions(administrator=True)`.
+
+3. LÓGICA DINÁMICA DE BOTONES (discord.ui.View):
+   Modifica la vista de botones en el comando de compra para que se adapte según el estado de la variable:
+   - Si `MODO_AUTO_MP` es True (Activado): El bot debe mostrar DOS botones juntos en el mensaje de compra: el botón tipo link que redirige a Mercado Pago (con el emoji 💳) y el botón verde de "Transferencia" (con el emoji de la bandera argentina 🇦🇷).
+   - Si `MODO_AUTO_MP` es False (Desactivado): El bot debe REMOVER el botón de Mercado Pago por completo. El mensaje de compra solo debe mostrar el botón verde de "Transferencia" con la bandera argentina 🇦🇷 (o el flujo manual de siempre).
+
+4. DETALLE DEL BOTÓN DE TRANSFERENCIA:
+   Al hacer clic en el botón verde de "Transferencia 🇦🇷", el bot siempre debe responder de forma efímera (`ephemeral=True`) mostrando estos datos fijos de Naranja X:
+   🏦 **Datos para Transferencia Bancaria / Virtual**
+   • **Alias:** `agusmarquesini.nx`
+   • **CBU:** `4530000800012463323851`
+   • **Titular:** Agustín Nahuel Marquesini
+   ⚠️ *Nota: Una vez hecha la transferencia, por favor envía el comprobante por este chat para procesar tu archivo.*
+
+Por favor, localiza el archivo donde manejas los comandos de venta, implementa estos dos comandos nuevos y ajusta la vista para que quite y ponga el botón de Mercado Pago dinámicamente según corresponda.

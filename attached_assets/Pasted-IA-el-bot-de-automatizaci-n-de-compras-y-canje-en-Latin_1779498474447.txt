@@ -1,0 +1,27 @@
+IA, el bot de automatización de compras y canje en Latin GM está tirando errores "404 Not Found" porque las rutas de la página cambiaron. Necesito que reestructures el flujo de navegación (web scraping / automatización) utilizando el siguiente flujo exacto y las URL actualizadas basadas en las capturas del sistema:
+
+⚠️ RECORDATORIO CRÍTICO: No toques NADA del código de Telegram ni de Telethon. Eso funciona perfecto. Solo arregla las rutas y el proceso de compra de Discord/Web.
+
+Flujo de navegación que debes programar:
+
+1. SELECCIÓN Y CARRITO:
+   - El bot debe ingresar a la sección de recargas de Free Fire Latam en 'latingm.com'.
+   - Seleccionar el producto según el comando del usuario (ej: 100 Diamantes + 10 Bono a $0.88 USDT, o la opción correspondiente).
+   - Añadir al carrito, ir a la sección del carrito ('latingm.com/carrito/') y presionar el botón "FINALIZAR COMPRA".
+
+2. PASARELA DE PAGO:
+   - En la pantalla de checkout, el bot debe seleccionar la opción "Paga con Binance Pay".
+   - En el menú desplegable "Seleccione una moneda de pago", debe marcar obligatoriamente "USDT".
+   - Marcar la casilla de "He leído y estoy de acuerdo con los términos y condiciones" y hacer clic en el botón verde "REALIZAR EL PEDIDO".
+
+3. EXTRACCIÓN DEL PIN DE COMPRA:
+   - Una vez procesado el pago en Binance, el bot debe ir a la sección de la cuenta del usuario: 'latingm.com/mi-cuenta/pedidos/'.
+   - Debe ingresar al último pedido completado haciendo clic en el botón "VER" (la URL final de los detalles tiene la estructura 'latingm.com/mi-cuenta/ver-pedido/XXXXX/').
+   - Dentro de "Actualizaciones del pedido", el bot debe localizar el cuadro gris, buscar la sección que dice "Pin:" y extraer el código alfanumérico completo que incluye guiones (ejemplo de formato: 33197925-84D5-4BOF-B1B8-C57B4B933534).
+
+4. REDENCIÓN AUTOMÁTICA EN REDEEMPINS:
+   - Con el Pin copiado, el bot debe abrir una pestaña y dirigirse a la URL exacta: 'https://redeempins.com/'.
+   - Debe ubicar el campo de texto bajo el título "INSERTA TU PIN" (input con placeholder o etiqueta de "Código Pin").
+   - Pegar el Pin extraído anteriormente y hacer clic en el botón verde "Canjear".
+
+Por favor, actualiza todos los selectores CSS, XPath y URLs del script de automatización para que coincidan con este nuevo diseño de la plataforma y evitar los errores 404.

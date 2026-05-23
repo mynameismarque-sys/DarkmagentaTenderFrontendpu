@@ -1,0 +1,75 @@
+modules = ["python-3.11"]
+
+[deployment]
+deploymentTarget = "vm"
+run = ["bash", "start.sh"]
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 5173
+externalPort = 5173
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 8081
+externalPort = 80
+
+[nix]
+channel = "stable-25_05"
+packages = ["gitFull", "openssl", "playwright-driver", "postgresql"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Bot"
+
+[[workflows.workflow]]
+name = "Bot"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash start.sh"
+
+[agent]
+expertMode = true
+stack = "FLASK_VANILLA_JS"
+integrations = ["python_openai_ai_integrations:1.0.0"]
+
+[userenv]
+
+[userenv.shared]
+AI_INTEGRATIONS_OPENAI_BASE_URL = "http://localhost:1106/modelfarm/openai"
+AI_INTEGRATIONS_OPENAI_API_KEY = "_DUMMY_API_KEY_"
+EMAIL_PASS = "hezo iydj tdnp idfa"
+ADMIN_ROLE_ID = "1304508123054211092"
+BINANCE_PAY_ID = "1037986525"
+BINANCE_TITULAR = "Agustín Nahuel Marquesini"
+DISCORD_GUID_ID = "1306653592798625892"
+EMAIL_USER = "markediscord@gmail.com"
+MP_ACCESS_TOKEN = "APP_USR-1963602011414117-042622-5580e7e4b1366348303e6c5698643495-770480922"
+NX_ALIAS = "agusmarquesini.nx"
+NX_CBU = "4530000800012463323851"
+NX_TITULAR = "Agustín Nahuel Marquesini"
+TELEGRAM_API_ID = "22085021"
+TELEGRAM_API_HASH = "fc43c5c9d58870e5c6fb3218fcab5ef8"
+PROXY_PORT = "10066"
+PROXY_USER = "DGZADAXFF"
+PROXY_PASS = "DGZADAXFF"
+TELEGRAM_SESSION = "1AZWarzMBuylJHi0A_UTnwmK02XkVFVxKMFcCbNAoo18vMSQ7crgULSUacZr0nQJBOzzmW34mcRfiIxFb_j4WKx_saw-2l8fjvKGuItwoX3qw61Xvqh6xcYVpdEz5cUBMApCZ4GyGj55rN7ah4kz2HYAsFTnErw36OFwsLAriJH4CfHBuH_wL7m7xZn0odIsVnJYIn_ttlzmMAVQhm2a4D7h1JgCVZsIZeedZQTOZtRCa1rpHraFA-QCTuAOel_dJ8m3GRWy2ADjvWj_Pj_Pd4rUAUFpdReAqqDstEy3_kB-4xxiRzrwh7kgn0GG9klP7rcUU-MMzh5EVjAA6ukij_dc51dLLlBY="

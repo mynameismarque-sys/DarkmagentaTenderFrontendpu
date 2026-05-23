@@ -1,0 +1,21 @@
+Hola. Necesito actualizar el bot de Discord y el script de Web Scraping agregando restricciones de canal, una interfaz visual con Embed y Botones, y limitando las opciones de pago a Transferencia Bancaria y Binance Pay (excluyendo por completo Mercado Pago debido a las comisiones).
+
+REQUISITOS DEL BOT DE DISCORD (INTERFAZ Y RESTRICCIONES)
+1. Restricción de Canal: El comando o la interacción de compra de diamantes SOLO debe funcionar si se ejecuta dentro del canal específico llamado 'diamantes'. Si se intenta usar en otro lado, el bot debe responder amablemente diciendo que vayan a ese canal.
+2. Interfaz con Embed y Botones: El bot debe enviar un mensaje fijo y estético (Embed) en el canal 'diamantes' que detalle la lista de precios y paquetes disponibles. Abajo del mensaje, debe mostrar botones interactivos con las diferentes opciones de diamantes (ej: "100 Diamantes", "310 Diamantes", etc.).
+3. Selección de Método de Pago: Al hacer clic en un paquete, el bot debe desplegar dos opciones de pago mediante nuevos botones o un menú de selección:
+   - Opción A: Transferencia Bancaria (El bot muestra un mensaje con el CBU/Alias y avisa que un administrador procesará el pedido tras verificar el comprobante).
+   - Opción B: Binance Pay (Lanza de forma interna el script híbrido de Web Scraping que configuramos previamente).
+
+INTEGRACIÓN CON EL SCRIPT HÍBRIDO DE SCRAPING (FASE POST-PAGO DE BINANCE)
+Si el usuario selecciona Binance Pay y se inicia el proceso:
+4. El bot abre el navegador, inicia sesión en https://latingm.com/ con las credenciales de los Secrets (SHOP_USER y SHOP_PASS), añade el paquete elegido al carrito y avanza al checkout.
+5. Selecciona el método de redirección de Binance y hace clic en "Realizar el pedido". El script se pausa automáticamente aquí y me redirige a mi cuenta de Binance para que yo confirme el pago manualmente.
+6. Monitoreo Post-Pago: En cuanto el script detecta que la URL vuelve con éxito a latingm.com (pago completado), va directo a "Mi Perfil" -> "Pedidos", ingresa al último pedido, localiza el CÓDIGO/PIN generado y lo copia.
+7. Autocompletado en Redeempins: Inmediatamente el script navega a https://redeempins.com/ y rellena el formulario de forma 100% automática con estos datos exactos:
+   - Campo ID del Jugador: Pegar el 'ID_FreeFire_Cliente' enviado por el usuario.
+   - Campo Código/PIN: Pegar el código copiado de Latin GM.
+   - Campo Nombre y Apellido: 'Agustin Marquesini'.
+   - Campo País: Seleccionar 'Argentina'.
+   - Campo Fecha de Nacimiento: '1/1/2000'.
+8. El bot hace clic en canjear, espera la pantalla de éxito, toma una captura de pantalla final y se la envía al cliente en Discord de manera efímera (ephemeral=True) como comprobante.

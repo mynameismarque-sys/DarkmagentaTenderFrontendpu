@@ -1,0 +1,78 @@
+¡Toda la razón! El Agent de Replit necesita los enlaces crudos y directos para no confundirse y poder programar el bot correctamente. Si solo ve el hipervínculo, a veces no copia la URL real.
+
+Aquí tienes el Prompt Maestro con todas las URLs expandidas para que el Agent tenga la información completa y detallada:
+
+🛠️ AGENT: FULL SYSTEM UPGRADE (CRITICAL DATA & LINKS)
+Oye Agent, realiza esta actualización masiva. No omitas ningún link, ya que son los archivos reales que el bot debe entregar. Prioriza la estabilidad y el ahorro de créditos.
+
+1. Estabilidad y Gestión de Pagos
+Defer Interaction: Implementa await interaction.response.defer() en los botones de "Verificar Pago" para evitar errores de tiempo de espera (timeout).
+
+Base de Datos: Registra las transacciones y el sistema de referidos en un archivo database.sqlite o data.json para evitar el uso de servicios de pago de Replit.
+
+2. Sistema de Afiliados (Comisión 10%)
+Lógica: Crea un sistema donde el usuario que invita reciba el 10% del valor de cada compra aprobada de sus referidos como saldo en el bot.
+
+Comandos: Implementa /invitar para generar el ID y /perfil para ver el saldo acumulado.
+
+3. Segmentación del comando /comprar
+El bot debe identificar el canal y mostrar solo los productos pertinentes (Sensis en canal "Sensis", Proxy en canal "Proxy", Regedits en canal "Regedits").
+
+4. Catálogo Android (Entrega Automática)
+Al confirmar pago "approved", el bot debe enviar por mensaje privado (DM) el link de descarga y el tutorial exacto:
+
+Lion Regedit ($2500):
+
+Descarga: https://www.mediafire.com/file/4ps6ydnxm5xidkn/Lion_Regedit_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/neUfRIn_-is
+
+Regedit S1mple ($3000):
+
+Descarga: https://www.mediafire.com/file/uxas8cz9zaorzzb/REGEDIT_S1MPLE_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/IyQQHE720KM
+
+Vape V1 ($5000):
+
+Descarga: https://www.mediafire.com/file/ujssvn7w7pkn3xq/VAPE_V1_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/c8ZhiBGWSEU
+
+Trick FF ($8000):
+
+Descarga: https://www.mediafire.com/file/060uik1xoytlz9q/Trick_FF_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/ESh0DSWiVOE
+
+Auxilio Android OB53 ($8500):
+
+Descarga: https://www.mediafire.com/file/t34mgwa4x9txsmj/Auxilio_Android_OB53_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/2h9Iv68kArQ
+
+KLZ Modded ($9000):
+
+Descarga: https://www.mediafire.com/file/kzoj7dzpr58tj44/KLZ_MODDED_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/5tUCXBjxcZs
+
+Modded V09 ($9500):
+
+Descarga: https://www.mediafire.com/file/obw3tbq7q8lcapd/MODDED_V09_%2540markee.4.rar/file
+
+Tutorial: https://youtu.be/XjKlze7tHf0
+
+5. Catálogo iOS (Mensaje de WhatsApp)
+Tras el pago aprobado, enviar por DM un link de contacto directo:
+
+Precios: $5000 (Auxilio de Mira $6000).
+
+Link: https://wa.me/5491140501714?text=Hola%20Markee,%20vengo%20por%20el%20archivo%20[PRODUCTO]%20de%20iOS
+
+Productos: HEADTRICK, TRICK, AUXILIO DE MIRA, REGEDIT 75%.
+
+6. Notas de Soporte
+Añadir en cada venta: "Este archivo optimiza la estabilidad de la mira para mejorar la precisión. No es un aimbot."
+
+En el Embed de Proxy, incluir el texto "TUTORIAL AQUÍ" con el enlace que te proporcionará el usuario.

@@ -1,0 +1,61 @@
+uploads = []
+
+[[generated]]
+id = "5xxQgsShsD_SpVGEs24fc"
+uri = "file://attached_assets/gengar_avatar.png"
+type = "image"
+title = "gengar avatar"
+
+[[generated]]
+id = "zA-T5GRDNGCaVLdX7J-_L"
+uri = "file://attached_assets/gengar_banner.png"
+type = "image"
+title = "gengar banner"
+
+[[generated]]
+id = "CN7mkO2X1wsPe46IU4NVx"
+uri = "file://attached_assets/gengar_profile_base.png"
+type = "image"
+title = "gengar profile dark glowing eyes"
+
+[[generated]]
+id = "A51JCl94b8HenGD-vTwqw"
+uri = "file://attached_assets/generated_images/gengar_banner.png"
+type = "image"
+title = "gengar banner character"
+
+[[generated]]
+id = "XmPLW_WbnC53IdIdI1Hwm"
+uri = "file://attached_assets/generated_images/gengar_phonk.png"
+type = "image"
+title = "gengar phonk aggressive"
+
+[[outputs]]
+id = "UeQ2WsD2IPELGheJrHBRc"
+uri = "file://attached_assets/gengar_avatar.png"
+type = "image"
+title = "Avatar del bot (Gengar)"
+
+[[outputs]]
+id = "ssDocXN6grXSRgJcLs4fO"
+uri = "file://attached_assets/gengar_banner.png"
+type = "image"
+title = "Banner del bot (Gengar)"
+
+[[outputs]]
+id = "JRnxrhq5QkCy1cLD5PdU6"
+uri = "file://attached_assets/gengar_avatar.gif"
+type = "image"
+title = "Avatar — Gengar + aura violeta + ojos pulsantes"
+
+[[outputs]]
+id = "3OUMoNzZxQLa_jxJnhcFm"
+uri = "file://attached_assets/gengar_banner.gif"
+type = "image"
+title = "Banner — tu imagen Gengar + ojos brillantes + Marke"
+
+[[outputs]]
+id = "6uqBhvWS25YpMr7_bYBpQ"
+uri = "file://assets/banner_marke.png"
+type = "image"
+title = "Banner Sensi Marke — Phonk/Streetwear 1280×720"
