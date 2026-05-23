@@ -5232,6 +5232,64 @@ async def aprobar_manual(
 
 
 @tree.command(
+    name="diamantes-manual",
+    description="(Admin) Relanzar entrega de diamantes para un usuario que pagó pero no recibió",
+)
+@app_commands.describe(
+    usuario="Usuario que debe recibir los diamantes",
+    cantidad="Cantidad de diamantes (110, 341, 572, 1166, 2398 o 6160)",
+    id_freefire="ID de Free Fire del comprador",
+)
+async def diamantes_manual(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    cantidad: int,
+    id_freefire: str,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    validos = list(_DIAM_PRECIOS.keys())
+    if cantidad not in validos:
+        await interaction.followup.send(
+            f"❌ Cantidad inválida. Packs válidos: {', '.join(str(v) for v in validos)}",
+            ephemeral=True,
+        )
+        return
+
+    precio = _DIAM_PRECIOS.get(cantidad, "?")
+    log.info(
+        "DIAMANTES MANUAL — admin=%s usuario=%s diamonds=%d id_ff=%s",
+        interaction.user, usuario, cantidad, id_freefire,
+    )
+
+    canal_ventas = await _obtener_canal_ventas()
+    if canal_ventas:
+        embed_log = discord.Embed(
+            title="💎 Entrega Manual de Diamantes",
+            description=(
+                f"👤 **Admin:** {interaction.user.mention}\n"
+                f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
+                f"💎 **Paquete:** {cantidad:,} Diamantes — {precio} ARS\n"
+                f"🎮 **ID Free Fire:** `{id_freefire}`\n\n"
+                "⏳ Iniciando proceso automático..."
+            ),
+            color=0xF0B90B,
+        )
+        await canal_ventas.send(embed=embed_log)
+
+    asyncio.create_task(_tarea_diamantes_binance(usuario, cantidad, id_freefire))
+
+    await interaction.followup.send(
+        f"✅ Proceso iniciado para **{cantidad:,} 💎** → {usuario.mention} (ID FF: `{id_freefire}`).\n"
+        "El resultado llegará al usuario por DM y se notificará en #ventas.",
+        ephemeral=True,
+    )
+
+
+@tree.command(
     name="enviar-key",
     description="(Admin) Enviar una key de proxy por DM a un usuario",
 )
