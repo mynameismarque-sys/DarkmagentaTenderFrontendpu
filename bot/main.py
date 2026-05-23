@@ -1125,6 +1125,17 @@ async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
         )
         return
 
+    # Verificar si la key está baneada
+    ban_info = database.is_key_banned(key)
+    if ban_info:
+        razon_txt = f"\nMotivo: *{ban_info['reason']}*" if ban_info.get("reason") else ""
+        await interaction.followup.send(
+            f"🚫 La key `{key}` fue **baneada** y no puede usarse más.{razon_txt}\n"
+            "Si creés que es un error, contactá a un administrador.",
+            ephemeral=True,
+        )
+        return
+
     try:
         respuesta = await telegram_client.cmd_key(key, ip_clean)
         await interaction.followup.send(
@@ -1134,6 +1145,7 @@ async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
             "https://chat.whatsapp.com/DQxndyWBG860vpaVcxam3s",
             ephemeral=True,
         )
+        database.record_key_activation(key, str(interaction.user.id), ip_clean)
         asyncio.create_task(_log_key(
             "activada_ok", key, interaction.user.id,
             ip=ip_clean, respuesta_tg=respuesta,
@@ -1182,6 +1194,128 @@ async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
             "activada_error", key, interaction.user.id,
             ip=ip_clean, error=exc_str,
         ))
+
+
+# ---------------------------------------------------------------------------
+# /ban-key y /unban-key — banear/desbanear keys de proxy
+# ---------------------------------------------------------------------------
+@tree.command(
+    name="ban-key",
+    description="(Admin) Banear una key para que no se pueda usar nunca más",
+)
+@app_commands.describe(
+    key="La key a banear (ej: MARKEXYZ123)",
+    razon="Motivo del ban (opcional)",
+)
+async def ban_key_cmd(
+    interaction: discord.Interaction,
+    key: str,
+    razon: str | None = None,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    key_clean = key.strip().upper()
+
+    ya_baneada = database.is_key_banned(key_clean)
+    if ya_baneada:
+        await interaction.followup.send(
+            f"⚠️ La key `{key_clean}` **ya estaba baneada** (baneada por `{ya_baneada.get('banned_by', '?')}` el {str(ya_baneada.get('banned_at', '?'))[:16]}).",
+            ephemeral=True,
+        )
+        return
+
+    # Guardar ban en DB
+    database.ban_key(
+        key=key_clean,
+        discord_id=None,
+        reason=razon,
+        banned_by=str(interaction.user),
+    )
+
+    # Buscar si la key tiene IPs activas en Firebase y eliminarlas
+    activaciones = database.get_key_activations(key_clean)
+    ips_eliminadas: list[str] = []
+    ips_no_encontradas: list[str] = []
+
+    if activaciones:
+        ips_vistas: set[str] = set()
+        for act in activaciones:
+            ip = act.get("ip", "")
+            if ip and ip not in ips_vistas:
+                ips_vistas.add(ip)
+                eliminada = await asyncio.to_thread(automation.eliminar_ip_en_firebase, ip)
+                if eliminada:
+                    ips_eliminadas.append(ip)
+                else:
+                    ips_no_encontradas.append(ip)
+
+    log.warning(
+        "BAN KEY — key=%s admin=%s (%s) razon=%r IPs_eliminadas=%s",
+        key_clean, interaction.user, interaction.user.id, razon, ips_eliminadas,
+    )
+
+    # Notificar en #ventas
+    try:
+        canal_ventas = await _obtener_canal_ventas()
+        if canal_ventas:
+            embed = discord.Embed(
+                title="🚫 Key Baneada",
+                description=(
+                    f"🔑 **Key:** `{key_clean}`\n"
+                    f"🛡️ **Admin:** {interaction.user.mention}\n"
+                    + (f"📝 **Motivo:** {razon}\n" if razon else "")
+                    + (f"🌐 **IPs eliminadas de Firebase:** {', '.join(f'`{ip}`' for ip in ips_eliminadas)}\n" if ips_eliminadas else "")
+                    + (f"⚠️ **IPs no encontradas en Firebase:** {', '.join(f'`{ip}`' for ip in ips_no_encontradas)}\n" if ips_no_encontradas else "")
+                ),
+                color=0xE74C3C,
+            )
+            embed.timestamp = discord.utils.utcnow()
+            await canal_ventas.send(embed=embed)
+    except Exception:
+        log.exception("Error posteando ban de key en #ventas")
+
+    # Armar respuesta al admin
+    lineas = [f"✅ Key `{key_clean}` **baneada correctamente**."]
+    if razon:
+        lineas.append(f"📝 Motivo: {razon}")
+    if ips_eliminadas:
+        lineas.append(f"🌐 IPs eliminadas de Firebase: {', '.join(f'`{ip}`' for ip in ips_eliminadas)}")
+    if ips_no_encontradas:
+        lineas.append(f"⚠️ IPs no encontradas en Firebase (puede que ya hayan expirado): {', '.join(f'`{ip}`' for ip in ips_no_encontradas)}")
+    if not activaciones:
+        lineas.append("ℹ️ No había activaciones registradas para esta key (nunca se usó o fue activada antes de esta versión).")
+
+    await interaction.followup.send("\n".join(lineas), ephemeral=True)
+
+
+@tree.command(
+    name="unban-key",
+    description="(Admin) Desbanear una key para que pueda volver a usarse",
+)
+@app_commands.describe(key="La key a desbanear (ej: MARKEXYZ123)")
+async def unban_key_cmd(interaction: discord.Interaction, key: str):
+    await _safe_defer(interaction, ephemeral=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    key_clean = key.strip().upper()
+    eliminada = database.unban_key(key_clean)
+
+    if eliminada:
+        log.info("UNBAN KEY — key=%s admin=%s (%s)", key_clean, interaction.user, interaction.user.id)
+        await interaction.followup.send(
+            f"✅ Key `{key_clean}` **desbaneada**. Ya puede volver a activarse.",
+            ephemeral=True,
+        )
+    else:
+        await interaction.followup.send(
+            f"⚠️ La key `{key_clean}` no estaba en la lista de baneadas.",
+            ephemeral=True,
+        )
 
 
 # ---------------------------------------------------------------------------

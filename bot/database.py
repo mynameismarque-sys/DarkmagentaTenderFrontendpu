@@ -161,6 +161,32 @@ def init_db() -> None:
             )
             """
         )
+        # Keys baneadas — no pueden activarse nunca más
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS banned_keys (
+                key         TEXT PRIMARY KEY,
+                discord_id  TEXT,
+                reason      TEXT,
+                banned_by   TEXT,
+                banned_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # Activaciones de keys — vincula key → discord_id → IP → usuario proxy
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS keys_activations (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                key         TEXT NOT NULL,
+                discord_id  TEXT NOT NULL,
+                ip          TEXT NOT NULL,
+                proxy_user  TEXT,
+                activated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_keys_activations_key ON keys_activations(key)")
         conn.commit()
 
 
@@ -822,3 +848,70 @@ def load_all_tickets() -> list[dict]:
     with _lock, _connect() as conn:
         rows = conn.execute("SELECT * FROM active_tickets").fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Keys baneadas
+# ---------------------------------------------------------------------------
+def ban_key(key: str, discord_id: str | None, reason: str | None, banned_by: str) -> None:
+    """Banea una key para que nunca se pueda volver a activar."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO banned_keys (key, discord_id, reason, banned_by)
+            VALUES (?, ?, ?, ?)
+            """,
+            (key.upper().strip(), discord_id, reason, banned_by),
+        )
+        conn.commit()
+
+
+def unban_key(key: str) -> bool:
+    """Desbanea una key. Devuelve True si existía."""
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM banned_keys WHERE key = ?", (key.upper().strip(),))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def is_key_banned(key: str) -> dict | None:
+    """Devuelve el registro de ban si la key está baneada, o None si no lo está."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM banned_keys WHERE key = ?", (key.upper().strip(),)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_banned_keys(limit: int = 50) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM banned_keys ORDER BY banned_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Activaciones de keys — vincula key → IP → usuario proxy
+# ---------------------------------------------------------------------------
+def record_key_activation(key: str, discord_id: str, ip: str, proxy_user: str | None = None) -> None:
+    """Guarda cada vez que una key se activa exitosamente con una IP."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO keys_activations (key, discord_id, ip, proxy_user)
+            VALUES (?, ?, ?, ?)
+            """,
+            (key.upper().strip(), str(discord_id), ip, proxy_user),
+        )
+        conn.commit()
+
+
+def get_key_activations(key: str) -> list[dict]:
+    """Devuelve todas las activaciones de una key (más reciente primero)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM keys_activations WHERE key = ? ORDER BY id DESC",
+            (key.upper().strip(),),
+        ).fetchall()
+        return [dict(r) for r in rows]

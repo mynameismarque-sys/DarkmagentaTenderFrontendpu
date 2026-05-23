@@ -395,6 +395,23 @@ def _ip_to_key(ip: str) -> str:
     return ip.replace(".", ",")
 
 
+def eliminar_ip_en_firebase(ip: str) -> bool:
+    """Elimina la entrada de una IP en Firebase. Devuelve True si existía y se borró."""
+    try:
+        token = _fb_login()
+        ip_key = _ip_to_key(ip)
+        data = _fb_get(f"ips_autorizadas/{ip_key}", token)
+        if data:
+            _fb_delete(f"ips_autorizadas/{ip_key}", token)
+            log.info("eliminar_ip_en_firebase: IP %s eliminada de Firebase", ip)
+            return True
+        log.info("eliminar_ip_en_firebase: IP %s no encontrada en Firebase", ip)
+        return False
+    except Exception:
+        log.exception("eliminar_ip_en_firebase: error al eliminar %s", ip)
+        return False
+
+
 def _fb_buscar_ip_por_credenciales(token: str, usuario: str, password: str) -> tuple[str | None, dict | None]:
     """
     Busca en Firebase la entrada cuyo bot.username == usuario y bot.password == password.
