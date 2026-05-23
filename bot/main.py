@@ -5555,18 +5555,20 @@ async def diamantes_manual(
 
 @tree.command(
     name="reenviar-diamantes",
-    description="(Admin) Buscar el PIN del último pedido y canjear en redeempins cuando el automático falló",
+    description="(Admin) Canjear diamantes para un usuario; PIN opcional si la búsqueda automática falla",
 )
 @app_commands.describe(
     usuario="Usuario que debe recibir los diamantes",
     id_freefire="ID de Free Fire del comprador",
     cantidad="Cantidad de diamantes (110, 341, 572, 1166, 2398 o 6160)",
+    pin="PIN del pedido (opcional — pegalo directo si la búsqueda automática falló)",
 )
 async def reenviar_diamantes_cmd(
     interaction: discord.Interaction,
     usuario: discord.Member,
     id_freefire: str,
     cantidad: int,
+    pin: str | None = None,
 ):
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     if not _puede_registrar(interaction):
@@ -5588,6 +5590,7 @@ async def reenviar_diamantes_cmd(
 
     canal_ventas = await _obtener_canal_ventas()
     if canal_ventas:
+        modo = f"🔑 PIN manual: `{pin}`" if pin else "🔍 Buscando PIN del último pedido completado..."
         embed_log = discord.Embed(
             title="🔁 Reenvío de Diamantes",
             description=(
@@ -5595,25 +5598,29 @@ async def reenviar_diamantes_cmd(
                 f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
                 f"💎 **Paquete:** {cantidad:,} Diamantes\n"
                 f"🎮 **ID Free Fire:** `{id_freefire}`\n\n"
-                "🔍 Buscando PIN del último pedido completado..."
+                f"{modo}"
             ),
             color=0x3498DB,
         )
         await canal_ventas.send(embed=embed_log)
 
-    await interaction.followup.send(
-        f"⏳ Buscando el PIN del pedido de **{cantidad:,} 💎** y canjeando para {usuario.mention}...\n"
-        "El resultado llegará al usuario por DM y se notificará en #ventas.",
-        ephemeral=True,
-    )
+    if pin:
+        msg_followup = f"⏳ Usando PIN manual para **{cantidad:,} 💎** → {usuario.mention}..."
+    else:
+        msg_followup = (
+            f"⏳ Buscando el PIN del pedido de **{cantidad:,} 💎** y canjeando para {usuario.mention}...\n"
+            "El resultado llegará al usuario por DM y se notificará en #ventas."
+        )
+    await interaction.followup.send(msg_followup, ephemeral=True)
 
     async def _tarea_reenvio():
         import io as _io
-        pin_encontrado = ""
+        pin_encontrado = pin.strip() if pin else ""
         order_id_encontrado = ""
         try:
-            # ── 1. Buscar el PIN automáticamente en latingm.com ───────────────
-            pin_encontrado, order_id_encontrado = await latingm_scraper.obtener_pin_de_ultimo_pedido(cantidad)
+            # ── 1. PIN: usar el manual si fue provisto, si no buscar en latingm ─
+            if not pin_encontrado:
+                pin_encontrado, order_id_encontrado = await latingm_scraper.obtener_pin_de_ultimo_pedido(cantidad)
 
             if not pin_encontrado:
                 msg_fallo = (

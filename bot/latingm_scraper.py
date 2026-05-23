@@ -25,8 +25,14 @@ PAQUETES = {
     6160: {"base": 5600, "precio": "$64.300 ARS"},
 }
 
+# Patrones de PIN que latingm.com puede entregar:
+# 1. UUID estilo Windows (mayús o minús): XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+# 2. Código alfanumérico corto sin guiones: 16-32 chars (ej. ABCD1234EFGH5678)
 _PIN_PATTERN = re.compile(
-    r'\b[A-Z0-9]{8}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{12}\b'
+    r'\b(?:[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}'
+    r'|[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}'
+    r'|[A-Za-z0-9]{16,32})\b',
+    re.ASCII,
 )
 
 # Marcador especial que main.py detecta para activar el fallback manual
