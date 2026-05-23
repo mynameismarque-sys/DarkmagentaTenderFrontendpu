@@ -9598,15 +9598,23 @@ def main() -> None:
             log.exception("Error fatal en client.run, abortando.")
             raise
 
-        # client.run() terminó — verificar si es porque prod tiene la sesión
+        # client.run() terminó — verificar si es porque prod tiene la sesión.
+        # IMPORTANTE: esperar en un loop hasta que prod libere la sesión ANTES
+        # de reconectar al gateway, para que dev nunca reciba interacciones
+        # mientras prod está activa.
         if not IS_PRODUCTION and telegram_client.prod_has_session():
-            wait = telegram_client.DUP_RETRY_SECS
+            while telegram_client.prod_has_session():
+                wait = telegram_client.DUP_RETRY_SECS
+                log.info(
+                    "Dev: prod activa — gateway de Discord cerrado. "
+                    "Re-verificando en %ds...",
+                    wait,
+                )
+                time.sleep(wait)
             log.info(
-                "Dev: prod activa — gateway de Discord cerrado. "
-                "Reconectando en %ds cuando prod se detenga.",
-                wait,
+                "Dev: prod ya no tiene la sesión de Telegram — "
+                "reconectando al gateway de Discord."
             )
-            time.sleep(wait)
             # Continúa el while → client.run() de nuevo
         else:
             break  # Salida normal (prod mode o cierre limpio)
