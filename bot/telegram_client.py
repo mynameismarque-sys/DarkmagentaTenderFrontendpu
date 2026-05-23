@@ -510,6 +510,14 @@ def is_ready() -> bool:
         return False
 
 
+def prod_has_session() -> bool:
+    """True si producción tiene la sesión de Telegram activa (AuthKeyDuplicatedError).
+    Usado por el bot de desarrollo para ceder interacciones al bot de producción.
+    Thread-safe.
+    """
+    return _prod_has_session
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _ensure_ready — corre en _tg_loop
 # ─────────────────────────────────────────────────────────────────────────────

@@ -188,11 +188,35 @@ async def _safe_defer(
         raise _DeferFailed(str(e)) from e
 
 
+@tree.interaction_check
+async def _global_interaction_check(interaction: discord.Interaction) -> bool:
+    """Cuando el bot de DESARROLLO detecta que producción tiene la sesión de Telegram,
+    no responde a ninguna interacción. Así el bot de PRODUCCIÓN la procesa solo.
+
+    Si el bot de dev respondiera primero (aunque sea con un error), Discord marca la
+    interacción como resuelta y el bot de prod nunca llega a responder.
+    Silenciar el bot de dev acá hace que Discord espere hasta que prod responda.
+    """
+    if not IS_PRODUCTION and telegram_client.prod_has_session():
+        log.debug(
+            "Bot DEV cediendo interacción '%s' de %s al bot de producción.",
+            getattr(interaction.command, "name", interaction.type),
+            interaction.user,
+        )
+        return False   # discord.py no procesará el comando; prod bot responderá
+    return True
+
+
 @tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     cmd_name = interaction.command.name if interaction.command else "desconocido"
     # Unwrap el error real si viene envuelto en CommandInvokeError
     real_error = getattr(error, "original", error)
+
+    # Bot de DEV cediendo al de producción: no responder para que prod pueda hacerlo.
+    if isinstance(error, app_commands.CheckFailure) and not IS_PRODUCTION and telegram_client.prod_has_session():
+        log.debug("Bot DEV: CheckFailure por cesión a producción — ignorado.")
+        return
 
     # _DeferFailed = interacción expirada antes de poder responder.
     # No intentamos enviar nada (la interacción ya está muerta) y no logueamos
