@@ -5791,13 +5791,25 @@ async def _reorganizar_categorias() -> None:
             except Exception as exc:
                 log.warning("_reorganizar_categorias: no pude borrar #%s: %s", ch.name, exc)
 
+    # ── Subir categoría CONTADOR al inicio absoluto ───────────────────────
+    cat_contador = discord.utils.find(
+        lambda c: isinstance(c, discord.CategoryChannel) and "CONTADOR" in c.name.upper(),
+        guild.channels,
+    )
+    if cat_contador:
+        try:
+            await cat_contador.edit(position=0, reason="Contador al inicio")
+            log.info("_reorganizar_categorias: categoría '%s' movida al inicio", cat_contador.name)
+        except Exception as exc:
+            log.warning("_reorganizar_categorias: no pude reposicionar CONTADOR: %s", exc)
+
     if cat_store:
         for ch in guild.text_channels:
             if any(frag in ch.name.lower() for frag in nombres_store):
                 await _mover(ch, cat_store, _CAT_STORE)
-        # Subir la categoría STORE al principio del servidor
+        # Subir la categoría STORE justo después del contador
         try:
-            await cat_store.edit(position=0, reason="STORE al inicio")
+            await cat_store.edit(position=1, reason="STORE al inicio")
             log.info("_reorganizar_categorias: categoría '%s' movida al inicio", _CAT_STORE)
         except Exception as exc:
             log.warning("_reorganizar_categorias: no pude reposicionar STORE: %s", exc)
