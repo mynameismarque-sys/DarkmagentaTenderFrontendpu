@@ -400,7 +400,10 @@ async def _login(page, shop_user: str, shop_pass: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _extraer_pin_de_pedido(page) -> str:
+    """Intenta extraer el PIN/licencia del pedido usando múltiples estrategias."""
     pin = ""
+
+    # ── Estrategia 1: buscar "Pin: XXXX" en texto plano ─────────────────────
     try:
         body = await page.inner_text("body")
         pin_line = re.search(
@@ -414,17 +417,60 @@ async def _extraer_pin_de_pedido(page) -> str:
     except Exception:
         pass
 
+    # ── Estrategia 2: regex UUID en texto plano ──────────────────────────────
     try:
         body = await page.inner_text("body")
         match = _PIN_PATTERN.search(body)
         if match:
             pin = match.group(0)
-            log.info("latingm: PIN via regex = %s", pin)
+            log.info("latingm: PIN via regex texto = %s", pin)
             return pin
     except Exception:
         pass
 
-    for sel in ["code", "kbd", "pre", ".woocommerce-order-updates", ".order-update", "td"]:
+    # ── Estrategia 3: regex UUID en HTML completo (puede estar en atributos) ─
+    try:
+        html = await page.content()
+        match = _PIN_PATTERN.search(html)
+        if match:
+            pin = match.group(0)
+            log.info("latingm: PIN via regex HTML = %s", pin)
+            return pin
+    except Exception:
+        pass
+
+    # ── Estrategia 4: selectores específicos de WooCommerce y elementos comunes
+    _SELECTORS = [
+        # Elementos de código / texto literal
+        "code", "kbd", "pre",
+        # WooCommerce order detail
+        ".woocommerce-order-details",
+        ".woocommerce-table__product-name",
+        ".wc-item-meta",
+        ".wc-item-meta-label",
+        ".item-meta",
+        ".item-downloads",
+        ".woocommerce-order-updates",
+        ".order-update",
+        ".woocommerce-order__order-number",
+        # Notas del pedido (donde latingm suele entregar el PIN)
+        ".woocommerce-customer-details",
+        ".woocommerce-order-details__totals",
+        ".order_details",
+        ".shop_table",
+        ".woocommerce-table",
+        # Tablas y celdas genéricas
+        "td", "th",
+        # Elementos con palabras clave de licencia/serial/pin
+        "[class*='license']", "[class*='serial']",
+        "[class*='pin']", "[class*='key']",
+        "[class*='code']", "[class*='coupon']",
+        # Párrafos y divs que pueden contener el PIN
+        "p", ".woocommerce-message", ".woocommerce-info",
+        "mark", "strong", "b",
+    ]
+
+    for sel in _SELECTORS:
         try:
             for el in await page.locator(sel).all():
                 try:
@@ -438,6 +484,23 @@ async def _extraer_pin_de_pedido(page) -> str:
                     continue
         except Exception:
             continue
+
+    # ── Estrategia 5: buscar en el HTML de cada elemento (puede estar en value/data)
+    try:
+        for sel in ["input[readonly]", "input[type='text']", "textarea"]:
+            for el in await page.locator(sel).all():
+                try:
+                    val = await el.get_attribute("value", timeout=500)
+                    if val:
+                        m = _PIN_PATTERN.search(val)
+                        if m:
+                            pin = m.group(0)
+                            log.info("latingm: PIN en input value <%s> = %s", sel, pin)
+                            return pin
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
     return pin
 
@@ -956,20 +1019,26 @@ async def comprar_diamantes(
                 return screenshot, "⏰ Tiempo agotado — el pago Binance no fue confirmado en 10 minutos."
 
             # ── 13 & 14. Navegar al detalle del pedido completado ─────────────
-            # Si ya estamos en ver-pedido/XXX/ (desde el polling), extraemos PIN directo.
-            # Si estamos en el listado, clickeamos VER del primer pedido.
-            if order_id and f"ver-pedido/{order_id}" in page.url:
-                log.info("latingm: ya en detalle del pedido — URL=%s", page.url)
-                pin = await _extraer_pin_de_pedido(page)
-            else:
-                # Ir al detalle si tenemos order_id
+            # Intentar extraer el PIN hasta 4 veces con 5 s entre intentos
+            # (latingm puede tardar en generar el PIN tras confirmar el pago).
+            PIN_REINTENTOS   = 4
+            PIN_ESPERA_SEG   = 5
+            pin = ""
+
+            for pin_intento in range(1, PIN_REINTENTOS + 1):
+                log.info("latingm: extrayendo PIN (intento %d/%d)...", pin_intento, PIN_REINTENTOS)
+
                 if order_id:
-                    await _goto_cf(page, f"{LATINGM_URL}mi-cuenta/ver-pedido/{order_id}/", timeout=20_000)
-                    await page.wait_for_timeout(1_500)
+                    # Navegar / recargar la página del pedido
+                    order_url = f"{LATINGM_URL}mi-cuenta/ver-pedido/{order_id}/"
+                    try:
+                        await _goto_cf(page, order_url, timeout=20_000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(3_000)
                     log.info("latingm: en detalle de pedido — URL=%s", page.url)
-                    pin = await _extraer_pin_de_pedido(page)
                 else:
-                    # Sin order_id: usar el listado y clickear VER
+                    # Sin order_id: navegar al listado y clickear VER
                     for url_orders in [
                         f"{LATINGM_URL}mi-cuenta/pedidos/",
                         f"{LATINGM_URL}my-account/orders/",
@@ -983,7 +1052,6 @@ async def comprar_diamantes(
                         except Exception:
                             continue
 
-                    order_opened = False
                     for sel in [
                         "a:has-text('VER')", "a:has-text('Ver')",
                         "a[href*='ver-pedido']", "a[href*='view-order']",
@@ -994,7 +1062,6 @@ async def comprar_diamantes(
                             el = page.locator(sel).first
                             if await el.is_visible(timeout=3_000):
                                 await el.click(timeout=5_000)
-                                order_opened = True
                                 log.info("latingm: VER clickeado — %s", sel)
                                 break
                         except Exception:
@@ -1004,8 +1071,16 @@ async def comprar_diamantes(
                         await page.wait_for_load_state("domcontentloaded", timeout=10_000)
                     except Exception:
                         pass
-                    await page.wait_for_timeout(1_500)
-                    pin = await _extraer_pin_de_pedido(page)
+                    await page.wait_for_timeout(2_000)
+
+                pin = await _extraer_pin_de_pedido(page)
+                if pin:
+                    log.info("latingm: PIN extraído en intento %d — %s", pin_intento, pin)
+                    break
+
+                log.warning("latingm: PIN no encontrado en intento %d, esperando %ds...", pin_intento, PIN_ESPERA_SEG)
+                if pin_intento < PIN_REINTENTOS:
+                    await asyncio.sleep(PIN_ESPERA_SEG)
 
             if not pin:
                 screenshot = await page.screenshot()
