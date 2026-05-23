@@ -127,7 +127,22 @@ class _DeferFailed(Exception):
 
 
 class _SafeViewMixin:
-    """Mixin para discord.ui.View que maneja _DeferFailed silenciosamente."""
+    """Mixin para discord.ui.View que maneja _DeferFailed silenciosamente.
+
+    También cede interacciones de botones al bot de producción cuando el bot
+    de desarrollo detecta que producción tiene la sesión de Telegram activa.
+    """
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Cede al bot de producción si estamos en modo desarrollo con Telegram activo en prod."""
+        if not IS_PRODUCTION and telegram_client.prod_has_session():
+            log.debug(
+                "Bot DEV cediendo botón '%s' de %s al bot de producción.",
+                getattr(interaction.data, "custom_id", "?"),
+                interaction.user,
+            )
+            return False  # discord.py no ejecuta el callback; prod bot lo maneja
+        return True
 
     async def on_error(
         self,
@@ -193,14 +208,17 @@ async def _global_interaction_check(interaction: discord.Interaction) -> bool:
     """Cuando el bot de DESARROLLO detecta que producción tiene la sesión de Telegram,
     no responde a ninguna interacción. Así el bot de PRODUCCIÓN la procesa solo.
 
-    Si el bot de dev respondiera primero (aunque sea con un error), Discord marca la
-    interacción como resuelta y el bot de prod nunca llega a responder.
-    Silenciar el bot de dev acá hace que Discord espere hasta que prod responda.
+    Excepción: /tg_relogin y /tg_codigo pueden correr desde desarrollo para
+    renovar la sesión cuando producción también está caída.
     """
     if not IS_PRODUCTION and telegram_client.prod_has_session():
+        cmd_name = getattr(interaction.command, "name", "")
+        # Estos dos comandos deben poder correr desde desarrollo para renovar la sesión
+        if cmd_name in ("tg_relogin", "tg_codigo"):
+            return True
         log.debug(
             "Bot DEV cediendo interacción '%s' de %s al bot de producción.",
-            getattr(interaction.command, "name", interaction.type),
+            cmd_name or interaction.type,
             interaction.user,
         )
         return False   # discord.py no procesará el comando; prod bot responderá
