@@ -1618,9 +1618,8 @@ async def obtener_pin_de_ultimo_pedido(diamonds: int) -> tuple[str, str]:
 
                     # Verificar que el pedido contiene el paquete correcto
                     body = await page.inner_text("body")
-                    body_lower = body.lower()
-                    # Buscar el base_str (ej. "100") en el contenido — puede
-                    # aparecer como "100 diamantes", "100+10", etc.
+                    # Buscar el base_str (ej. "100") o el total de diamantes
+                    # (ej. "110") en el contenido — aparece en el nombre del producto
                     if base_str not in body and str(diamonds) not in body:
                         log.info("obtener_pin_de_ultimo_pedido: pedido %s no es de %s diamantes, saltando", oid, diamonds)
                         continue
