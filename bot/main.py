@@ -127,21 +127,9 @@ class _DeferFailed(Exception):
 
 
 class _SafeViewMixin:
-    """Mixin para discord.ui.View que maneja _DeferFailed silenciosamente.
-
-    También cede interacciones de botones al bot de producción cuando el bot
-    de desarrollo detecta que producción tiene la sesión de Telegram activa.
-    """
+    """Mixin para discord.ui.View que maneja _DeferFailed silenciosamente."""
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Cede al bot de producción si estamos en modo desarrollo con Telegram activo en prod."""
-        if not IS_PRODUCTION and telegram_client.prod_has_session():
-            log.debug(
-                "Bot DEV cediendo botón '%s' de %s al bot de producción.",
-                getattr(interaction.data, "custom_id", "?"),
-                interaction.user,
-            )
-            return False  # discord.py no ejecuta el callback; prod bot lo maneja
         return True
 
     async def on_error(
@@ -205,23 +193,6 @@ async def _safe_defer(
 
 @tree.interaction_check
 async def _global_interaction_check(interaction: discord.Interaction) -> bool:
-    """Cuando el bot de DESARROLLO detecta que producción tiene la sesión de Telegram,
-    no responde a ninguna interacción. Así el bot de PRODUCCIÓN la procesa solo.
-
-    Excepción: /tg_relogin y /tg_codigo pueden correr desde desarrollo para
-    renovar la sesión cuando producción también está caída.
-    """
-    if not IS_PRODUCTION and telegram_client.prod_has_session():
-        cmd_name = getattr(interaction.command, "name", "")
-        # Estos dos comandos deben poder correr desde desarrollo para renovar la sesión
-        if cmd_name in ("tg_relogin", "tg_codigo"):
-            return True
-        log.debug(
-            "Bot DEV cediendo interacción '%s' de %s al bot de producción.",
-            cmd_name or interaction.type,
-            interaction.user,
-        )
-        return False   # discord.py no procesará el comando; prod bot responderá
     return True
 
 
@@ -230,11 +201,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     cmd_name = interaction.command.name if interaction.command else "desconocido"
     # Unwrap el error real si viene envuelto en CommandInvokeError
     real_error = getattr(error, "original", error)
-
-    # Bot de DEV cediendo al de producción: no responder para que prod pueda hacerlo.
-    if isinstance(error, app_commands.CheckFailure) and not IS_PRODUCTION and telegram_client.prod_has_session():
-        log.debug("Bot DEV: CheckFailure por cesión a producción — ignorado.")
-        return
 
     # _DeferFailed = interacción expirada antes de poder responder.
     # No intentamos enviar nada (la interacción ya está muerta) y no logueamos
@@ -5887,23 +5853,20 @@ async def enviar_key_cmd(
             key, dias, usuario.id,
         )
     elif not telegram_client.is_ready():
-        # Si el bot de DEV no tiene Telegram, sugerir usar forzar=True
-        if not IS_PRODUCTION:
-            await interaction.followup.send(
-                f"⚠️ Este bot está en **modo desarrollo** y no tiene acceso a Telegram "
-                f"(producción lo está usando).\n\n"
-                f"**Opción A** — Usá el mismo comando con `forzar:True` para enviar la key "
-                f"por DM sin registrarla en Telegram (entrega urgente). "
-                f"Después registrala manualmente cuando Telegram esté libre.\n\n"
-                f"**Opción B** — Republicá el proyecto para que el bot de producción maneje el comando.",
-                ephemeral=True,
-            )
-        else:
+        if IS_PRODUCTION:
             await interaction.followup.send(
                 "❌ El sistema Telegram no está disponible. Intentá en unos minutos.",
                 ephemeral=True,
             )
-        return
+            return
+        # En desarrollo sin Telegram: forzar automáticamente para que el usuario
+        # siempre reciba su key. Telegram se registrará cuando prod lo maneje.
+        log.warning(
+            "/enviar-key: dev sin Telegram — ejecutando en modo forzado automático. "
+            "key=%s dias=%d para %s",
+            key, dias, usuario.id,
+        )
+        forzar = True
     else:
         try:
             await telegram_client.cmd_gen(key, dias)
