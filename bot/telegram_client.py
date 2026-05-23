@@ -360,16 +360,37 @@ async def _keepalive_loop() -> None:
                         log.info("✅ Telethon keepalive: reconectado OK — producción se detuvo.")
                         last_ping  = now
                         auth_delay = 60
+                    else:
+                        # ok=False → is_user_authorized() devolvió False (sesión inválida/revocada).
+                        # Producción también está sin Telegram → dev toma las interacciones
+                        # para que el usuario reciba un error útil en vez de "no respondió".
+                        _prod_has_session = False
+                        _next_dup_retry   = 0.0
+                        log.error(
+                            "Telethon keepalive: sesión no autorizada — liberando _prod_has_session. "
+                            "Necesitás regenerar TELEGRAM_SESSION con /tg_relogin."
+                        )
                 except AuthKeyDuplicatedError:
                     log.info("Telethon keepalive: producción sigue activa — reintentando en %ds.", DUP_RETRY_SECS)
+                except _BAD_AUTH_ERRORS as _auth_exc:
+                    # Sesión genuinamente inválida o revocada (no duplicada).
+                    # Producción TAMBIÉN está sin Telegram → dev debe manejar
+                    # las interacciones (aunque falle con error de Telegram,
+                    # es mejor que "La aplicación no respondió").
+                    _prod_has_session = False
+                    _next_dup_retry   = 0.0
+                    log.error(
+                        "Telethon keepalive: sesión inválida/revocada (%s) — "
+                        "liberando _prod_has_session. Necesitás regenerar TELEGRAM_SESSION.",
+                        type(_auth_exc).__name__,
+                    )
                 except Exception as _dup_exc:
-                    # Error distinto a AuthKeyDuplicatedError (p.ej. sesión inválida,
-                    # timeout de red, etc.). Logueamos y mantenemos _prod_has_session=True
-                    # para seguir cediendo interacciones a producción — es más seguro
-                    # que crear una ventana donde dev procesa comandos de usuarios.
+                    # Error de red u otro transitorio. Mantenemos _prod_has_session=True
+                    # pero actualizamos _next_dup_retry para no reintentar cada 10s.
+                    _next_dup_retry = time.monotonic() + DUP_RETRY_SECS
                     log.warning(
-                        "Telethon keepalive: error no-dup en reintento (%s) — "
-                        "manteniendo _prod_has_session=True, reintentando en %ds.",
+                        "Telethon keepalive: error transitorio en reintento (%s) — "
+                        "manteniendo _prod_has_session=True, próximo intento en %ds.",
                         type(_dup_exc).__name__,
                         DUP_RETRY_SECS,
                     )

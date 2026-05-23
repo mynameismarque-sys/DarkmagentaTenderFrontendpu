@@ -1110,11 +1110,6 @@ async def mercadostatus(interaction: discord.Interaction):
 @tree.command(name="gen", description="(Admin) Generar una key en el bot de FF Proxy")
 @app_commands.describe(key="La key a generar", dias="Cantidad de días de acceso")
 async def gen_cmd(interaction: discord.Interaction, key: str, dias: int):
-    # En modo desarrollo, ceder silenciosamente al bot de producción.
-    # NO llamar a _safe_defer() todavía — si dev consume la interacción primero,
-    # producción recibe "already acknowledged" y el usuario ve el error de dev.
-    if not IS_PRODUCTION and telegram_client.prod_has_session():
-        return
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     roles = getattr(interaction.user, "roles", [])
     tiene_rol_key = any(r.id == KEY_ALLOWED_ROLE_ID for r in roles)
@@ -1157,11 +1152,6 @@ KEY_ALLOWED_ROLE_ID = 1505803027188289679  # Rol con acceso a /key
 @tree.command(name="key", description="Activar tu key de FF Proxy con tu IP")
 @app_commands.describe(key="Tu key de acceso", ip="Tu IP pública")
 async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
-    # En modo desarrollo, ceder silenciosamente al bot de producción.
-    # NO llamar a _safe_defer() todavía — si dev consume la interacción primero,
-    # producción recibe "already acknowledged" y el usuario ve el error de dev.
-    if not IS_PRODUCTION and telegram_client.prod_has_session():
-        return
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     # Permitir: verificados, admins, o quien tenga el rol KEY_ALLOWED_ROLE_ID
     roles = getattr(interaction.user, "roles", [])
@@ -5881,9 +5871,6 @@ async def enviar_key_cmd(
     dias: int,
     forzar: bool = False,
 ):
-    # En modo desarrollo sin forzar, ceder silenciosamente a producción.
-    if not IS_PRODUCTION and not forzar and telegram_client.prod_has_session():
-        return
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     if not _puede_registrar(interaction):
         await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
