@@ -1,11 +1,9 @@
 """Automatización Playwright: latingm.com → redeempins.com para diamantes Free Fire."""
 import asyncio
-import json as _json
 import logging
 import os
+import random
 import re
-import urllib.parse as _urlparse
-import urllib.request as _urlreq
 from typing import Awaitable, Callable
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
@@ -33,6 +31,14 @@ _PIN_PATTERN = re.compile(
 
 # Marcador especial que main.py detecta para activar el fallback manual
 _PENDIENTE_MANUAL_TAG = "PENDIENTE_MANUAL"
+
+# ── User-Agent residencial actualizado (Chrome 131 / Windows 10) ─────────────
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+_SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
 
 _REDEEMPINS_NOMBRE = "Agustin Nahuel"
 _REDEEMPINS_FECHA  = "11/04/1999"
@@ -458,25 +464,25 @@ async def _insertar_pin_redeempins(page, pin: str) -> bool:
             except Exception:
                 pass
 
-            # ── Estrategia 2: triple-click (seleccionar todo) + type ──────
+            # ── Estrategia 2: triple-click (seleccionar todo) + escritura humanizada
             try:
                 await el.click(click_count=3, timeout=3_000)
-                await page.wait_for_timeout(200)
-                await el.press_sequentially(pin, delay=30)
+                await page.wait_for_timeout(random.randint(180, 350))
+                await _type_humanizado(page, pin)
                 await page.wait_for_timeout(300)
                 valor = await el.input_value(timeout=2_000)
                 if valor.strip():
-                    log.info("_insertar_pin_redeempins: ✅ estrategia press_sequentially — %s", sel)
+                    log.info("_insertar_pin_redeempins: ✅ estrategia humanizada — %s", sel)
                     return True
             except Exception:
                 pass
 
-            # ── Estrategia 3: Ctrl+A + type (limpiar y escribir) ─────────
+            # ── Estrategia 3: Ctrl+A + escritura humanizada ───────────────
             try:
                 await el.click(timeout=3_000)
                 await page.keyboard.press("Control+a")
-                await page.wait_for_timeout(100)
-                await page.keyboard.type(pin, delay=25)
+                await page.wait_for_timeout(random.randint(80, 180))
+                await _type_humanizado(page, pin)
                 await page.wait_for_timeout(300)
                 valor = await el.input_value(timeout=2_000)
                 if valor.strip():
@@ -513,126 +519,36 @@ async def _insertar_pin_redeempins(page, pin: str) -> bool:
     return False
 
 
-async def _resolver_captcha_2captcha(page) -> bool:
+async def _type_humanizado(page, text: str) -> None:
     """
-    Resuelve el reCAPTCHA invisible de redeempins.com usando la API de 2Captcha.
-    Requiere la variable de entorno CAPTCHA_API_KEY.
-    1. Extrae el sitekey del DOM.
-    2. Envía la tarea a 2Captcha.
-    3. Hace polling hasta obtener el token (máx 120 s).
-    4. Inyecta el token en g-recaptcha-response y dispara el callback.
-    Devuelve True si el token fue inyectado, False en cualquier otro caso.
+    Escribe texto carácter a carácter con retrasos aleatorios que imitan
+    la velocidad de tipeo humana (40-120 ms/tecla, pausas ocasionales).
+    El reCAPTCHA invisible de redeempins.com analiza los eventos de
+    teclado para detectar bots; este helper los hace indistinguibles.
     """
-    api_key = os.environ.get("CAPTCHA_API_KEY", "").strip()
-    if not api_key:
-        log.info("_resolver_captcha_2captcha: CAPTCHA_API_KEY no configurada — saltando")
-        return False
+    for i, char in enumerate(text):
+        await page.keyboard.type(char)
+        delay = random.randint(40, 120)
+        # Pausa "pensante" cada 4-9 caracteres
+        if i > 0 and i % random.randint(4, 9) == 0:
+            delay += random.randint(120, 380)
+        await page.wait_for_timeout(delay)
 
-    # ── 1. Extraer sitekey ────────────────────────────────────────────────────
-    sitekey = None
-    try:
-        sitekey = await page.evaluate("""
-            () => {
-                const el = document.querySelector('[data-sitekey]');
-                if (el) return el.getAttribute('data-sitekey');
-                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
-                    for (const id in window.___grecaptcha_cfg.clients) {
-                        const cl = window.___grecaptcha_cfg.clients[id];
-                        for (const k in cl) {
-                            if (cl[k] && cl[k].sitekey) return cl[k].sitekey;
-                        }
-                    }
-                }
-                return null;
-            }
-        """)
-    except Exception as exc:
-        log.warning("_resolver_captcha_2captcha: error leyendo sitekey: %s", exc)
-        return False
 
-    if not sitekey:
-        log.warning("_resolver_captcha_2captcha: sitekey no encontrado — saltando")
-        return False
-
-    page_url = page.url
-    log.info("_resolver_captcha_2captcha: sitekey=%s url=%s", sitekey, page_url)
-
-    # ── 2. Enviar tarea a 2Captcha ────────────────────────────────────────────
-    try:
-        submit_url = (
-            "https://2captcha.com/in.php"
-            f"?key={api_key}"
-            f"&method=userrecaptcha"
-            f"&googlekey={_urlparse.quote(sitekey)}"
-            f"&pageurl={_urlparse.quote(page_url)}"
-            "&json=1&invisible=1"
-        )
-        with _urlreq.urlopen(submit_url, timeout=20) as resp:
-            data = _json.loads(resp.read())
-        if data.get("status") != 1:
-            log.warning("_resolver_captcha_2captcha: 2Captcha rechazó la tarea: %s", data)
-            return False
-        task_id = data["request"]
-        log.info("_resolver_captcha_2captcha: tarea enviada id=%s", task_id)
-    except Exception as exc:
-        log.warning("_resolver_captcha_2captcha: error enviando a 2Captcha: %s", exc)
-        return False
-
-    # ── 3. Polling (máx 120 s) ────────────────────────────────────────────────
-    token = None
-    for attempt in range(24):          # 24 × 5 s = 120 s
-        await asyncio.sleep(5)
-        try:
-            poll_url = (
-                "https://2captcha.com/res.php"
-                f"?key={api_key}&action=get&id={task_id}&json=1"
-            )
-            with _urlreq.urlopen(poll_url, timeout=15) as resp:
-                data = _json.loads(resp.read())
-            if data.get("status") == 1:
-                token = data["request"]
-                log.info("_resolver_captcha_2captcha: ✅ token obtenido (intento %d)", attempt + 1)
-                break
-            if data.get("request") in ("ERROR_CAPTCHA_UNSOLVABLE", "ERROR_BAD_DUPLICATES"):
-                log.warning("_resolver_captcha_2captcha: captcha irresoluble: %s", data["request"])
-                return False
-            log.debug("_resolver_captcha_2captcha: pendiente intento %d: %s", attempt + 1, data)
-        except Exception as exc:
-            log.warning("_resolver_captcha_2captcha: error polling intento %d: %s", attempt + 1, exc)
-
-    if not token:
-        log.warning("_resolver_captcha_2captcha: timeout — no se obtuvo token en 120 s")
-        return False
-
-    # ── 4. Inyectar token ─────────────────────────────────────────────────────
-    try:
-        await page.evaluate(
-            """(tok) => {
-                document.querySelectorAll(
-                    '[name="g-recaptcha-response"], #g-recaptcha-response'
-                ).forEach(el => {
-                    el.value = tok; el.innerHTML = tok;
-                    try { el.style.display = 'block'; } catch(e) {}
-                });
-                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
-                    for (const id in window.___grecaptcha_cfg.clients) {
-                        const cl = window.___grecaptcha_cfg.clients[id];
-                        for (const k in cl) {
-                            if (cl[k] && typeof cl[k].callback === 'function') {
-                                try { cl[k].callback(tok); } catch(e) {}
-                            }
-                        }
-                    }
-                }
-            }""",
-            token,
-        )
-        await page.wait_for_timeout(600)
-        log.info("_resolver_captcha_2captcha: ✅ token inyectado en la página")
-        return True
-    except Exception as exc:
-        log.warning("_resolver_captcha_2captcha: error inyectando token: %s", exc)
-        return False
+async def _pre_clic_humano(page) -> None:
+    """
+    Simula micro-movimientos de mouse y una pausa antes de hacer clic en
+    un botón. El reCAPTCHA invisible rastrea trayectorias del cursor.
+    """
+    vp = page.viewport_size or {"width": 1280, "height": 800}
+    # Mover a una posición aleatoria y esperar un poco
+    rx = random.randint(100, vp["width"] - 100)
+    ry = random.randint(100, vp["height"] - 200)
+    await page.mouse.move(rx, ry)
+    await page.wait_for_timeout(random.randint(200, 500))
+    # Segundo micro-movimiento (jitter)
+    await page.mouse.move(rx + random.randint(-15, 15), ry + random.randint(-10, 10))
+    await page.wait_for_timeout(random.randint(300, 800))
 
 
 async def _extraer_pin_de_pedido(page) -> str:
@@ -769,16 +685,12 @@ async def comprar_diamantes(
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_UA,
             locale="es-AR",
             timezone_id="America/Argentina/Buenos_Aires",
             extra_http_headers={
                 "Accept-Language": "es-AR,es;q=0.9,en-US;q=0.8,en;q=0.7",
-                "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "sec-ch-ua": _SEC_CH_UA,
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
             },
@@ -1357,10 +1269,8 @@ async def comprar_diamantes(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
 
-            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
-            captcha_ok = await _resolver_captcha_2captcha(page)
-            log.info("redeempins: captcha_ok=%s", captcha_ok)
-            await page.wait_for_timeout(500)
+            # Micro-movimientos humanos antes del clic → evita trigger del reCAPTCHA invisible
+            await _pre_clic_humano(page)
 
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",
@@ -1556,12 +1466,14 @@ async def completar_pedido_existente(
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_UA,
             locale="es-AR",
+            extra_http_headers={
+                "Accept-Language": "es-AR,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": _SEC_CH_UA,
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+            },
         )
         await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
@@ -1598,10 +1510,8 @@ async def completar_pedido_existente(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
 
-            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
-            captcha_ok = await _resolver_captcha_2captcha(page)
-            log.info("completar_pedido: captcha_ok=%s", captcha_ok)
-            await page.wait_for_timeout(500)
+            # Micro-movimientos humanos antes del clic → evita trigger del reCAPTCHA invisible
+            await _pre_clic_humano(page)
 
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",
@@ -1773,13 +1683,15 @@ async def obtener_pin_de_ultimo_pedido(diamonds: int) -> tuple[str, str]:
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_UA,
             locale="es-AR",
             timezone_id="America/Argentina/Buenos_Aires",
+            extra_http_headers={
+                "Accept-Language": "es-AR,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": _SEC_CH_UA,
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+            },
         )
         await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
@@ -1908,13 +1820,15 @@ async def canjear_pin_directo(
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_UA,
             locale="es-AR",
             timezone_id="America/Argentina/Buenos_Aires",
+            extra_http_headers={
+                "Accept-Language": "es-AR,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": _SEC_CH_UA,
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"Windows"',
+            },
         )
         await context.add_init_script(_STEALTH_JS)
         page = await context.new_page()
@@ -1931,10 +1845,8 @@ async def canjear_pin_directo(
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com.\nPIN: `{pin}`"
 
-            # Resolver reCAPTCHA invisible antes de hacer clic en Canjear
-            captcha_ok = await _resolver_captcha_2captcha(page)
-            log.info("canjear_pin_directo: captcha_ok=%s", captcha_ok)
-            await page.wait_for_timeout(500)
+            # Micro-movimientos humanos antes del clic → evita trigger del reCAPTCHA invisible
+            await _pre_clic_humano(page)
 
             for sel in [
                 "button:has-text('Canjear')", "button:has-text('CANJEAR')",

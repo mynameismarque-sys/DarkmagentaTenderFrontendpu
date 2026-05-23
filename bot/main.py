@@ -3765,21 +3765,25 @@ async def _dm_alerta_manual_admin(
     diamonds: int,
     comprador: str = "",
 ) -> None:
-    """DM a todos los admins + post en #ventas cuando el canje automático falla por reCAPTCHA."""
+    """
+    DM limpio y accionable a todos los admins cuando el reCAPTCHA bloqueó
+    el canje automático. El comprador NO ve ningún mensaje de error.
+    """
+    desc = (
+        f"**ID Free Fire:** `{id_freefire}`\n"
+        f"**PIN a canjear:**\n```\n{pin}\n```\n"
+        f"**Link directo:** https://redeempins.com/\n"
+        f"**Diamantes:** {diamonds:,} 💎"
+    )
+    if comprador:
+        desc += f"\n**Comprador:** {comprador}"
+
     embed = discord.Embed(
-        title="⚠️ CANJE MANUAL REQUERIDO",
-        description=(
-            "El reCAPTCHA bloqueó el canje automático en redeempins.com.\n"
-            "**Canjeá el PIN manualmente** para completar la entrega al comprador."
-        ),
+        title="⚠️ Canje manual pendiente",
+        description=desc,
         color=0xFFA500,
     )
-    embed.add_field(name="🔑 PIN", value=f"```{pin}```", inline=False)
-    embed.add_field(name="🎮 ID Free Fire", value=f"`{id_freefire}`", inline=True)
-    embed.add_field(name="💎 Diamantes",    value=str(diamonds),       inline=True)
-    if comprador:
-        embed.add_field(name="👤 Comprador", value=comprador, inline=False)
-    embed.set_footer(text="Marke Panel — canje pendiente de resolución manual")
+    embed.set_footer(text="Marke Panel — el comprador espera la entrega")
 
     # DM a todos los admins con ese rol
     guild = _resolver_guild()
@@ -3795,18 +3799,6 @@ async def _dm_alerta_manual_admin(
                         pass
         except Exception:
             log.exception("_dm_alerta_manual_admin: error enviando DMs")
-
-    # Post visible en #ventas
-    try:
-        canal = await _obtener_canal_ventas()
-        if canal:
-            await canal.send(
-                content="@here ⚠️ **CANJE MANUAL REQUERIDO** — revisar embed abajo",
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(everyone=True),
-            )
-    except Exception:
-        log.exception("_dm_alerta_manual_admin: error enviando a #ventas")
 
 
 async def _tarea_diamantes_binance(
