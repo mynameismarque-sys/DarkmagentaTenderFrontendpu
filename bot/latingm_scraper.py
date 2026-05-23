@@ -1078,6 +1078,30 @@ async def comprar_diamantes(
                     log.info("latingm: PIN extraído en intento %d — %s", pin_intento, pin)
                     break
 
+                # Fallback: buscar también en la sección de Descargas
+                if not pin:
+                    try:
+                        log.info("latingm: intentando sección Descargas para PIN...")
+                        for url_dl in [
+                            f"{LATINGM_URL}mi-cuenta/descargas/",
+                            f"{LATINGM_URL}my-account/downloads/",
+                        ]:
+                            try:
+                                await _goto_cf(page, url_dl, timeout=15_000)
+                                await page.wait_for_timeout(2_000)
+                                pin = await _extraer_pin_de_pedido(page)
+                                if pin:
+                                    log.info("latingm: PIN encontrado en Descargas — %s", pin)
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
+                if pin:
+                    log.info("latingm: PIN extraído en intento %d (vía Descargas) — %s", pin_intento, pin)
+                    break
+
                 log.warning("latingm: PIN no encontrado en intento %d, esperando %ds...", pin_intento, PIN_ESPERA_SEG)
                 if pin_intento < PIN_REINTENTOS:
                     await asyncio.sleep(PIN_ESPERA_SEG)
