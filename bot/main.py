@@ -3844,52 +3844,69 @@ async def _tarea_diamantes_binance(
                 diamonds=pm["diamonds"], comprador=user.mention,
             ))
 
-        # Nunca mostrar URLs internas ni el nombre del proveedor al comprador
-        import re as _re
-        resultado_comprador = _re.sub(r"https?://\S+", "", resultado).strip()
-        resultado_comprador = _re.sub(r"latingm(?:\.com)?", "el proveedor", resultado_comprador, flags=_re.IGNORECASE)
-        # Limpiar el marcador interno del mensaje al comprador
-        resultado_comprador = resultado_comprador.replace(latingm_scraper._PENDIENTE_MANUAL_TAG, "").strip()
-        resultado_comprador = _re.sub(r"(PIN|ID|DIAM):[^\n]+\n?", "", resultado_comprador).strip()
+        exito = resultado.startswith("✅")
 
-        color = 0x2ECC71 if resultado.startswith("✅") else 0xE74C3C
-        embed_res = discord.Embed(
-            title="💎 Resultado de tu compra — Diamantes",
-            description=resultado_comprador,
-            color=color,
-        )
-        embed_res.set_footer(text="Marke Panel • @markee.4")
-
-        if screenshot_bytes:
-            file = discord.File(io.BytesIO(screenshot_bytes), filename="comprobante.png")
-            embed_res.set_image(url="attachment://comprobante.png")
-            await user.send(embed=embed_res, file=file)
+        # ── Mensaje al COMPRADOR: genérico, sin capturas ni datos internos ───
+        if exito:
+            msg_comprador = (
+                f"✅ ¡Listo! Recibiste **{diamonds:,} 💎** en tu cuenta de Free Fire.\n"
+                "Revisá tu cuenta — puede demorar unos minutos en aparecer."
+            )
         else:
-            await user.send(embed=embed_res)
+            msg_comprador = (
+                f"💎 Tu recarga de **{diamonds:,} diamantes** está siendo procesada.\n"
+                "En breve te llegará. Si tenés dudas escribí a un admin."
+            )
+        embed_comprador = discord.Embed(
+            description=msg_comprador,
+            color=0x2ECC71 if exito else 0xF1C40F,
+        )
+        embed_comprador.set_footer(text="Marke Panel • @markee.4")
+        try:
+            await user.send(embed=embed_comprador)
+        except Exception:
+            pass
 
+        # ── Reporte completo en #ventas (solo admins lo ven) ─────────────────
         try:
             canal_ventas = await _obtener_canal_ventas()
             if canal_ventas:
-                status = "✅ Completado" if resultado.startswith("✅") else "❌ Error"
-                # En #ventas sí mostramos el resultado completo (para el admin)
-                await canal_ventas.send(
-                    f"**{status}** — {diamonds:,}💎 para {user.mention} (ID FF: `{id_freefire}`): {resultado[:300]}"
+                status = "✅ Completado" if exito else ("⏳ PENDIENTE MANUAL" if pm else "❌ Error")
+                resumen = resultado[:400]
+                msg_ventas = (
+                    f"**{status}** — {diamonds:,}💎 · {user.mention} · ID FF: `{id_freefire}`\n"
+                    f"```\n{resumen}\n```"
                 )
+                if screenshot_bytes:
+                    await canal_ventas.send(
+                        content=msg_ventas,
+                        file=discord.File(io.BytesIO(screenshot_bytes), filename="resultado.png"),
+                    )
+                else:
+                    await canal_ventas.send(msg_ventas)
         except Exception:
             pass
 
     except Exception as exc:
         log.exception("Error en _tarea_diamantes_binance para %s", user)
         try:
-            await user.send("❌ Hubo un error procesando tu compra. Un administrador fue notificado.")
+            embed_err = discord.Embed(
+                description=(
+                    f"💎 Tu recarga de **{diamonds:,} diamantes** está siendo procesada.\n"
+                    "En breve te llegará. Si tenés dudas escribí a un admin."
+                ),
+                color=0xF1C40F,
+            )
+            embed_err.set_footer(text="Marke Panel • @markee.4")
+            await user.send(embed=embed_err)
         except Exception:
             pass
         try:
             canal_ventas = await _obtener_canal_ventas()
             if canal_ventas:
                 await canal_ventas.send(
-                    f"❌ **Error interno** — {diamonds:,}💎 para {user.mention} "
-                    f"(ID FF: `{id_freefire}`): `{str(exc)[:300]}`"
+                    f"❌ **Error interno** — {diamonds:,}💎 · {user.mention} · ID FF: `{id_freefire}`\n"
+                    f"```\n{str(exc)[:400]}\n```"
                 )
         except Exception:
             pass
@@ -5645,29 +5662,37 @@ async def reenviar_diamantes_cmd(
                     diamonds=pm["diamonds"], comprador=usuario.mention,
                 ))
 
-            # Notificar al usuario por DM
-            try:
-                dm = await usuario.create_dm()
-                if screenshot:
-                    await dm.send(
-                        content=resultado,
-                        file=discord.File(
-                            fp=_io.BytesIO(screenshot),
-                            filename="reenvio_resultado.png",
-                        ),
+            # ── DM al COMPRADOR: genérico, sin capturas ni datos internos ────
+            if not pm:
+                try:
+                    dm = await usuario.create_dm()
+                    if exito:
+                        msg_buyer = (
+                            f"✅ ¡Listo! Recibiste **{cantidad:,} 💎** en tu cuenta de Free Fire.\n"
+                            "Revisá tu cuenta — puede demorar unos minutos en aparecer."
+                        )
+                    else:
+                        msg_buyer = (
+                            f"💎 Tu recarga de **{cantidad:,} diamantes** está siendo procesada.\n"
+                            "En breve te llegará. Si tenés dudas escribí a un admin."
+                        )
+                    embed_buyer = discord.Embed(
+                        description=msg_buyer,
+                        color=0x2ECC71 if exito else 0xF1C40F,
                     )
-                else:
-                    await dm.send(resultado)
-            except discord.Forbidden:
-                log.warning("reenviar_diamantes: DM bloqueado para %s", usuario)
+                    embed_buyer.set_footer(text="Marke Panel • @markee.4")
+                    await dm.send(embed=embed_buyer)
+                except discord.Forbidden:
+                    log.warning("reenviar_diamantes: DM bloqueado para %s", usuario)
 
-            # Notificar en #ventas
+            # ── Reporte completo en #ventas (solo admins lo ven) ─────────────
             try:
                 canal = await _obtener_canal_ventas()
                 if canal:
-                    color = 0x2ECC71 if exito else 0xE74C3C
+                    color = 0x2ECC71 if exito else (0xFFA500 if pm else 0xE74C3C)
+                    titulo = "✅ Reenvío completado" if exito else ("⏳ Pendiente manual" if pm else "❌ Reenvío fallido")
                     embed_res = discord.Embed(
-                        title="✅ Reenvío completado" if exito else "❌ Reenvío fallido",
+                        title=titulo,
                         description=(
                             f"👤 **Admin:** {interaction.user.mention}\n"
                             f"🎯 **Comprador:** {usuario.mention}\n"
@@ -5675,7 +5700,7 @@ async def reenviar_diamantes_cmd(
                             f"🎮 **ID FF:** `{id_freefire}`\n"
                             f"🔑 **PIN:** `{pin_encontrado}`\n"
                             + (f"📋 **Pedido:** `#{order_id_encontrado}`\n" if order_id_encontrado else "")
-                            + f"\n{resultado}"
+                            + f"\n```\n{resultado[:300]}\n```"
                         ),
                         color=color,
                     )
