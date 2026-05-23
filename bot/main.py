@@ -8757,6 +8757,28 @@ async def deshabilitar_chat_cmd(interaction: discord.Interaction):
     log.info("deshabilitar-chat: desactivado por %s", interaction.user)
 
 
+async def _monitor_prod_session_and_close_gateway() -> None:
+    """Dev: cierra el gateway de Discord cuando prod tiene la sesión de Telegram.
+
+    Esto fuerza que producción reciba el 100% de las interacciones de Discord
+    y pueda usar Telegram normalmente. El loop en main() reconecta cuando prod
+    se detenga y libere la sesión.
+    """
+    # Esperar a que Telethon termine de conectar y determine el estado
+    await asyncio.sleep(15)
+    while True:
+        if telegram_client.prod_has_session():
+            log.warning(
+                "Dev: prod tiene la sesión de Telegram — cerrando gateway de Discord "
+                "para que prod reciba el 100%% de las interacciones. "
+                "main() reconectará en %ds cuando prod se detenga.",
+                telegram_client.DUP_RETRY_SECS,
+            )
+            await client.close()
+            return  # main() loop maneja el reconecte
+        await asyncio.sleep(15)
+
+
 @client.event
 async def on_ready():
     global MODO_AUTO_MP, _ARG_EMOJI_ID
@@ -8987,6 +9009,15 @@ async def on_ready():
             log.exception("HTTPException en global sync")
     except Exception:
         log.exception("Error sincronizando slash commands global")
+
+    # En modo desarrollo: monitorear si prod tiene la sesión de Telegram y,
+    # si es así, cerrar el gateway de Discord para que prod reciba el 100%
+    # de las interacciones (con Telegram disponible).
+    if not IS_PRODUCTION:
+        asyncio.create_task(
+            _monitor_prod_session_and_close_gateway(),
+            name="dev-prod-session-monitor",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -9546,23 +9577,39 @@ def main() -> None:
     t.start()
 
     log.info("Iniciando bot de Discord...")
-    try:
-        client.run(DISCORD_TOKEN, log_handler=None)
-    except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
-        # DiscordServerError = 503 upstream
-        # HTTPException 429  = rate limit por demasiadas reconexiones rápidas
-        _is_retryable = isinstance(e, discord.errors.DiscordServerError) or (
-            isinstance(e, discord.errors.HTTPException) and e.status == 429
-        )
-        if _is_retryable:
-            # Código 42 = señal a start.sh para que reintente con backoff
-            log.warning("Discord temporalmente no disponible: %s — saliendo con código 42 para retry", e)
-            os._exit(42)
-        log.exception("Error HTTP fatal en client.run, abortando.")
-        raise
-    except Exception:
-        log.exception("Error fatal en client.run, abortando.")
-        raise
+    while True:
+        # Resetear el flag _closed para que client.run() pueda reconectar
+        client._closed = False
+        try:
+            client.run(DISCORD_TOKEN, log_handler=None)
+        except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
+            # DiscordServerError = 503 upstream
+            # HTTPException 429  = rate limit por demasiadas reconexiones rápidas
+            _is_retryable = isinstance(e, discord.errors.DiscordServerError) or (
+                isinstance(e, discord.errors.HTTPException) and e.status == 429
+            )
+            if _is_retryable:
+                # Código 42 = señal a start.sh para que reintente con backoff
+                log.warning("Discord temporalmente no disponible: %s — saliendo con código 42 para retry", e)
+                os._exit(42)
+            log.exception("Error HTTP fatal en client.run, abortando.")
+            raise
+        except Exception:
+            log.exception("Error fatal en client.run, abortando.")
+            raise
+
+        # client.run() terminó — verificar si es porque prod tiene la sesión
+        if not IS_PRODUCTION and telegram_client.prod_has_session():
+            wait = telegram_client.DUP_RETRY_SECS
+            log.info(
+                "Dev: prod activa — gateway de Discord cerrado. "
+                "Reconectando en %ds cuando prod se detenga.",
+                wait,
+            )
+            time.sleep(wait)
+            # Continúa el while → client.run() de nuevo
+        else:
+            break  # Salida normal (prod mode o cierre limpio)
 
 
 if __name__ == "__main__":
