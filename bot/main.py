@@ -5728,6 +5728,73 @@ async def enviar_key_cmd(
 
 CANAL_SENSI_ID: int | None = None   # se rellena en on_ready al crear/encontrar el canal
 CANAL_PROXY_ID   = 1486438612990951646
+
+# Nombres exactos de las categorías gestionadas por el bot
+_CAT_STORE     = "🛒 STORE"
+_CAT_COMUNIDAD = "💬 COMUNIDAD"
+
+
+async def _obtener_o_crear_categoria(
+    guild: discord.Guild,
+    nombre: str,
+) -> discord.CategoryChannel | None:
+    """Devuelve la categoría con ese nombre; la crea si no existe."""
+    cat = discord.utils.find(lambda c: c.name == nombre, guild.categories)
+    if cat:
+        return cat
+    try:
+        cat = await guild.create_category(nombre, reason="Setup automático — Marke Panel")
+        log.info("Categoría '%s' creada (id=%s)", nombre, cat.id)
+        return cat
+    except Exception:
+        log.exception("No pude crear categoría '%s'", nombre)
+        return None
+
+
+async def _reorganizar_categorias() -> None:
+    """
+    Crea las categorías STORE y COMUNIDAD si no existen y mueve los canales
+    correspondientes a ellas.
+    """
+    await client.wait_until_ready()
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    cat_store     = await _obtener_o_crear_categoria(guild, _CAT_STORE)
+    cat_comunidad = await _obtener_o_crear_categoria(guild, _CAT_COMUNIDAD)
+
+    # Canales que van a STORE (por fragmento de nombre)
+    nombres_store = [
+        "proxy-marke", "android-regedit", "ios-archivos",
+        "flourite", "diamantes-ff", "sensis-xitadas",
+    ]
+    # Canales que van a COMUNIDAD
+    nombres_comunidad = ["chat"]
+
+    async def _mover(ch: discord.TextChannel, cat: discord.CategoryChannel, tag: str):
+        if ch.category_id == cat.id:
+            return
+        try:
+            await ch.edit(category=cat, reason="Reorganización de categorías")
+            log.info("_reorganizar_categorias: #%s → %s", ch.name, tag)
+        except Exception as exc:
+            log.warning("_reorganizar_categorias: no pude mover #%s: %s", ch.name, exc)
+
+    if cat_store:
+        for ch in guild.text_channels:
+            if any(frag in ch.name.lower() for frag in nombres_store):
+                await _mover(ch, cat_store, _CAT_STORE)
+
+    if cat_comunidad:
+        for ch in guild.text_channels:
+            ch_plain = ch.name.lower().replace("💬", "").replace("・", "").strip()
+            if ch_plain in nombres_comunidad:
+                await _mover(ch, cat_comunidad, _CAT_COMUNIDAD)
+
+    log.info("_reorganizar_categorias: listo")
+
+
 PROXY_INFO_GIF   = Path("attached_assets/marke_proxy_banner.jpg")
 PROXY_VIDEO      = Path("attached_assets/demostracion_proxy.mp4")
 PROXY_SERVER     = "31.97.100.157"
@@ -5966,9 +6033,8 @@ async def _setup_canal_sensis() -> None:
         CANAL_SENSI_ID = canal_obj.id
         log.info("Canal sensis-xitadas encontrado (id=%s)", CANAL_SENSI_ID)
     else:
-        # Crear el canal bajo la misma categoría que proxy-marke
-        proxy_ch = client.get_channel(CANAL_PROXY_ID)
-        categoria = getattr(proxy_ch, "category", None)
+        # Crear el canal en la categoría STORE
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_STORE)
         try:
             canal_obj = await guild.create_text_channel(
                 "🎯・sensis-xitadas",
@@ -6223,8 +6289,7 @@ async def _setup_canal_con_catalogo(
     if canal_obj:
         log.info("Canal %s encontrado: %s (id=%s)", log_tag, canal_obj.name, canal_obj.id)
     else:
-        proxy_ch = client.get_channel(CANAL_PROXY_ID)
-        categoria = getattr(proxy_ch, "category", None)
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_STORE)
         try:
             canal_obj = await guild.create_text_channel(
                 nombre_crear,
@@ -6357,8 +6422,7 @@ async def _setup_canal_flourite() -> None:
             break
 
     if canal is None:
-        proxy_ch = client.get_channel(CANAL_PROXY_ID)
-        categoria = getattr(proxy_ch, "category", None)
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_STORE)
         try:
             canal = await guild.create_text_channel(
                 "🔮・flourite-ios",
@@ -6488,8 +6552,7 @@ async def _setup_canal_diamantes() -> None:
             break
 
     if canal is None:
-        proxy_ch = client.get_channel(CANAL_PROXY_ID)
-        categoria = getattr(proxy_ch, "category", None)
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_STORE)
         try:
             canal = await guild.create_text_channel(
                 "💎・diamantes-ff",
@@ -8287,8 +8350,7 @@ async def _setup_canal_chat() -> None:
             canal = ch
             break
 
-    proxy_ch = client.get_channel(CANAL_PROXY_ID)
-    categoria = getattr(proxy_ch, "category", None)
+    categoria = await _obtener_o_crear_categoria(guild, _CAT_COMUNIDAD)
 
     if canal is None:
         try:
@@ -8511,6 +8573,7 @@ async def on_ready():
     asyncio.create_task(_setup_canal_flourite())
     asyncio.create_task(_setup_canal_diamantes())
     asyncio.create_task(_setup_canal_chat())
+    asyncio.create_task(_reorganizar_categorias())
     asyncio.create_task(_configurar_canal_anuncios())
     asyncio.create_task(_configurar_canal_general())
     asyncio.create_task(_configurar_canal_ventas())
