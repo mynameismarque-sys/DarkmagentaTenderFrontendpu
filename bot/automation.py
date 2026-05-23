@@ -674,7 +674,12 @@ DASHBOARD_PUBLIC_URL = "https://dashboard-ditxdev.web.app/dashboard.html"
 
 
 async def contar_clientes_marke() -> int:
-    """Cuenta las IPs en el dashboard con 'Created by: Marke'."""
+    """Cuenta las IPs activas en el dashboard cuya key contiene 'MARKE'.
+
+    Usa Playwright para leer la tabla del dashboard y cuenta todas las filas
+    cuyo campo de usuario/key contiene 'MARKE' (insensible a mayúsculas).
+    Devuelve -1 si falla.
+    """
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(args=_BROWSER_ARGS, env=_get_chromium_env())
@@ -683,8 +688,20 @@ async def contar_clientes_marke() -> int:
             await asyncio.sleep(4)
             content = await page.content()
             await browser.close()
-            matches = re.findall(r"Created by:</strong>\s*Marke\b", content, re.IGNORECASE)
-            return len(matches)
+            # Contar filas cuyo usuario/key contiene "marke"
+            matches_marke = re.findall(r"MARKE", content, re.IGNORECASE)
+            # Restar falsos positivos: el título "Created by: Marke" aparece una sola vez
+            # por fila junto con el nombre de usuario que contiene MARKE en el key.
+            # Usamos el patrón del campo reseller y el del username combinado.
+            # Método: contar sólo "Created by:</strong>\s*Marke" (una por cliente)
+            matches_reseller = re.findall(r"Created by:</strong>\s*Marke\b", content, re.IGNORECASE)
+            if matches_reseller:
+                count = len(matches_reseller)
+            else:
+                # Fallback: contar por el nombre de usuario que contiene MARKE
+                count = len(matches_marke)
+            log.info("contar_clientes_marke: %d clientes MARKE en dashboard", count)
+            return count
     except Exception:
-        log.exception("Error contando clientes Marke en dashboard")
+        log.exception("contar_clientes_marke: error contando clientes MARKE en dashboard")
         return -1

@@ -1318,6 +1318,46 @@ async def unban_key_cmd(interaction: discord.Interaction, key: str):
         )
 
 
+@tree.command(
+    name="keys-baneadas",
+    description="(Admin) Ver la lista de todas las keys baneadas",
+)
+async def keys_baneadas_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    baneadas = database.list_banned_keys()
+
+    if not baneadas:
+        await interaction.followup.send("✅ No hay ninguna key baneada actualmente.", ephemeral=True)
+        return
+
+    lineas = []
+    for idx, entry in enumerate(baneadas, 1):
+        key_txt   = entry.get("key", "?")
+        motivo    = entry.get("reason") or "—"
+        by        = entry.get("banned_by") or "?"
+        when      = str(entry.get("banned_at", "?"))[:16]
+        lineas.append(f"`{idx}.` 🔑 `{key_txt}` — 📝 {motivo} — 🛡️ {by} — 📅 {when}")
+
+    # Discord no permite embeds con description > 4096 chars — paginar si hace falta
+    BLOQUE = 30
+    paginas = [lineas[i:i + BLOQUE] for i in range(0, len(lineas), BLOQUE)]
+
+    for num, pagina in enumerate(paginas, 1):
+        encabezado = f"🚫 **Keys baneadas ({len(baneadas)} total)**" if num == 1 else f"_(continuación {num}/{len(paginas)})_"
+        embed = discord.Embed(
+            title=encabezado if num == 1 else None,
+            description="\n".join(pagina),
+            color=0xE74C3C,
+        )
+        if num == 1:
+            embed.set_footer(text=f"Total baneadas: {len(baneadas)}")
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 # ---------------------------------------------------------------------------
 # /tg_relogin y /tg_codigo — regenerar sesión de Telegram desde producción
 # ---------------------------------------------------------------------------
