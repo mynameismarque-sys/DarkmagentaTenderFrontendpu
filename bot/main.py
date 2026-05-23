@@ -7489,6 +7489,69 @@ async def on_member_join(member: discord.Member) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Canal #chat — moderación y control
+# ---------------------------------------------------------------------------
+_CANAL_CHAT_ID: int | None = None   # se rellena en _setup_canal_chat()
+_CANAL_CHAT_NOMBRE = "💬・chat"
+
+# ¿Está habilitado para que la gente escriba? Persiste en DB.
+_chat_habilitado: bool = False
+
+# Regex para links de grupos externos que se banean en #chat
+_CHAT_LINKS_EXTERNOS_RE = re.compile(
+    r"(t\.me/|telegram\.me/|wa\.me/|chat\.whatsapp\.com/|"
+    r"discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)",
+    re.IGNORECASE,
+)
+
+# Regex para contenido de estafas / casinos / cripto / sorteos falsos
+_CHAT_SCAM_RE = re.compile(
+    r"(wesobit|stake\.com|roobet|bc\.game|duelbits|rollbit|"
+    r"jackbit|betfury|crashino|luckyblock|bspin|"
+    r"promo\s*code|promo\s*cod|codigo\s*promo|bonus\s*code|"
+    r"withdrawal\s+success|withdraw\s+success|retiro\s+exitoso|"
+    r"gana(?:r)?\s+\$|te\s+regalo\s+\$|(?:doy|dando|regalando)\s+\$|"
+    r"crypto\s*casino|casino\s*cripto|"
+    r"free\s*usdt|gratis\s*usdt|free\s*btc|"
+    r"invest(?:ment)?\s*platform|plataforma\s*de\s*inversion)",
+    re.IGNORECASE,
+)
+
+
+async def _ban_chat_infraccion(
+    message: discord.Message,
+    motivo_corto: str,
+    motivo_razon: str,
+) -> None:
+    """Borra el mensaje, banea al usuario y logea en #logs-registros."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    try:
+        await message.guild.ban(
+            message.author,
+            reason=f"[#chat] {motivo_razon}",
+            delete_message_seconds=86400,
+        )
+        log.warning(
+            "BAN #chat — %s: %s (%s)",
+            motivo_corto, message.author, message.author.id,
+        )
+    except discord.Forbidden:
+        log.warning("Sin permiso para banear a %s en #chat", message.author)
+    except Exception:
+        log.exception("Error baneando a %s en #chat", message.author)
+    await _log_antiraid(
+        f"🔨 Ban automático — #chat — {motivo_corto}",
+        0xFF0000,
+        f"**Usuario:** {message.author} (`{message.author.id}`)\n"
+        f"**Motivo:** {motivo_razon}\n"
+        f"**Contenido:** {(message.content or '')[:300]}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Anti-spam — detección y ban automático
 # ---------------------------------------------------------------------------
 # Parámetros de detección
@@ -7535,6 +7598,63 @@ async def _log_spam_ban(
 
 @client.event
 async def on_message(message: discord.Message):
+    # ── Moderación del canal #chat ────────────────────────────────────────
+    if (
+        message.guild is not None
+        and not message.author.bot
+        and _CANAL_CHAT_ID
+        and message.channel.id == _CANAL_CHAT_ID
+        and _chat_habilitado
+    ):
+        # Excluir admins de las restricciones de contenido en #chat
+        es_admin_chat = False
+        if ADMIN_ROLE_ID:
+            try:
+                rid = int(ADMIN_ROLE_ID)
+                if isinstance(message.author, discord.Member):
+                    es_admin_chat = (
+                        any(r.id == rid for r in message.author.roles)
+                        or message.author.guild_permissions.administrator
+                    )
+            except (TypeError, ValueError):
+                pass
+
+        if not es_admin_chat:
+            contenido = message.content or ""
+            # 1. Links a grupos externos (Telegram, WhatsApp, Discord invite)
+            if _CHAT_LINKS_EXTERNOS_RE.search(contenido):
+                await _ban_chat_infraccion(
+                    message,
+                    "link externo",
+                    "Envío de link a grupo/canal externo en #chat",
+                )
+                return
+            # 2. Contenido de estafa / casino / cripto falso
+            if _CHAT_SCAM_RE.search(contenido):
+                await _ban_chat_infraccion(
+                    message,
+                    "contenido scam",
+                    "Contenido de estafa o casino enviado en #chat",
+                )
+                return
+            # 3. Imágenes adjuntas con posible scam (capturas de casino/cripto)
+            #    No se puede analizar el contenido visual, pero sí el texto
+            #    de los embeds que Discord genera automáticamente de URLs
+            for emb in message.embeds:
+                emb_text = " ".join(filter(None, [
+                    emb.title, emb.description,
+                    getattr(emb.author, "name", None),
+                    getattr(emb.footer, "text", None),
+                ]))
+                if _CHAT_SCAM_RE.search(emb_text) or _CHAT_LINKS_EXTERNOS_RE.search(emb_text):
+                    await _ban_chat_infraccion(
+                        message,
+                        "embed scam",
+                        "Embed con contenido de estafa en #chat",
+                    )
+                    return
+        return  # mensaje legítimo en #chat → no procesar más abajo
+
     # ── Detección de invite links (incluye bots/apps) ─────────────────────
     if message.guild is not None and _INVITE_RE.search(message.content or ""):
         try:
@@ -8144,6 +8264,182 @@ async def _anunciar_nuevo_video_proxy() -> None:
         log.exception("_anunciar_nuevo_video_proxy: error publicando anuncio")
 
 
+# ---------------------------------------------------------------------------
+# Setup canal #chat
+# ---------------------------------------------------------------------------
+async def _setup_canal_chat() -> None:
+    """Crea/encuentra el canal #chat y lo deja bloqueado hasta que se habilite."""
+    global _CANAL_CHAT_ID, _chat_habilitado
+    await client.wait_until_ready()
+
+    guild = _resolver_guild()
+    if guild is None:
+        log.warning("_setup_canal_chat: guild no encontrado")
+        return
+
+    # Leer estado persistido
+    _chat_habilitado = database.get_config("chat_habilitado", "0") == "1"
+
+    # Buscar canal existente por nombre
+    canal: discord.TextChannel | None = None
+    for ch in guild.text_channels:
+        if ch.name.lower().replace("💬", "").replace("・", "").strip() == "chat":
+            canal = ch
+            break
+
+    proxy_ch = client.get_channel(CANAL_PROXY_ID)
+    categoria = getattr(proxy_ch, "category", None)
+
+    if canal is None:
+        try:
+            canal = await guild.create_text_channel(
+                _CANAL_CHAT_NOMBRE,
+                category=categoria,
+                topic="Chat general del servidor — Sensi Marke 🎮",
+                reason="Setup automático — Marke Panel",
+            )
+            log.info("_setup_canal_chat: canal creado (id=%s)", canal.id)
+        except Exception:
+            log.exception("_setup_canal_chat: no pude crear el canal")
+            return
+
+    _CANAL_CHAT_ID = canal.id
+
+    # Configurar permisos según el estado actual
+    await _aplicar_permisos_chat(guild, canal, _chat_habilitado)
+    log.info("_setup_canal_chat: listo — habilitado=%s canal=%s", _chat_habilitado, canal.id)
+
+
+async def _aplicar_permisos_chat(
+    guild: discord.Guild,
+    canal: discord.TextChannel,
+    habilitado: bool,
+) -> None:
+    """Aplica permisos al canal #chat (bloqueado o abierto para verificados)."""
+    try:
+        bot_member = guild.get_member(client.user.id)
+        rol_verificado = guild.get_role(ROL_VERIFICADO_ID)
+        admin_role = guild.get_role(int(ADMIN_ROLE_ID)) if ADMIN_ROLE_ID else None
+
+        # Default (todos): solo ver, no escribir
+        await canal.set_permissions(
+            guild.default_role,
+            view_channel=True,
+            send_messages=False,
+            add_reactions=False,
+        )
+        # Verificados: escribir solo cuando está habilitado
+        if rol_verificado:
+            await canal.set_permissions(
+                rol_verificado,
+                view_channel=True,
+                send_messages=habilitado,
+                read_message_history=True,
+                add_reactions=habilitado,
+                attach_files=habilitado,
+            )
+        # Admin: siempre puede escribir
+        if admin_role:
+            await canal.set_permissions(
+                admin_role,
+                view_channel=True,
+                send_messages=True,
+                manage_messages=True,
+                read_message_history=True,
+            )
+        # Bot: siempre puede gestionar
+        if bot_member:
+            await canal.set_permissions(
+                bot_member,
+                view_channel=True,
+                send_messages=True,
+                manage_messages=True,
+                read_message_history=True,
+                embed_links=True,
+            )
+        log.info("_aplicar_permisos_chat: permisos aplicados (habilitado=%s)", habilitado)
+    except Exception:
+        log.exception("_aplicar_permisos_chat: error configurando permisos")
+
+
+@tree.command(
+    name="habilitar-chat",
+    description="(Admin) Abre el canal #chat para que la gente pueda escribir",
+)
+async def habilitar_chat_cmd(interaction: discord.Interaction):
+    global _chat_habilitado
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    canal: discord.TextChannel | None = None
+    if _CANAL_CHAT_ID:
+        canal = guild.get_channel(_CANAL_CHAT_ID)
+    if canal is None:
+        for ch in guild.text_channels:
+            if ch.name.lower().replace("💬", "").replace("・", "").strip() == "chat":
+                canal = ch
+                break
+
+    if canal is None:
+        await interaction.followup.send("❌ No encontré el canal #chat.", ephemeral=True)
+        return
+
+    _chat_habilitado = True
+    database.set_config("chat_habilitado", "1")
+    await _aplicar_permisos_chat(guild, canal, True)
+
+    await canal.send(
+        "💬 **¡El chat está abierto!**\n"
+        "Bienvenidos. Respetense, no spam, no links externos.\n"
+        "El incumplimiento de las reglas resulta en **ban permanente** automático. 🚫"
+    )
+
+    await interaction.followup.send(
+        f"✅ Canal {canal.mention} **habilitado**. La gente ya puede escribir.",
+        ephemeral=True,
+    )
+    log.info("habilitar-chat: activado por %s", interaction.user)
+
+
+@tree.command(
+    name="deshabilitar-chat",
+    description="(Admin) Cierra el canal #chat para que nadie pueda escribir",
+)
+async def deshabilitar_chat_cmd(interaction: discord.Interaction):
+    global _chat_habilitado
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    canal: discord.TextChannel | None = None
+    if _CANAL_CHAT_ID:
+        canal = guild.get_channel(_CANAL_CHAT_ID)
+    if canal is None:
+        for ch in guild.text_channels:
+            if ch.name.lower().replace("💬", "").replace("・", "").strip() == "chat":
+                canal = ch
+                break
+
+    if canal is None:
+        await interaction.followup.send("❌ No encontré el canal #chat.", ephemeral=True)
+        return
+
+    _chat_habilitado = False
+    database.set_config("chat_habilitado", "0")
+    await _aplicar_permisos_chat(guild, canal, False)
+
+    await interaction.followup.send(
+        f"🔒 Canal {canal.mention} **deshabilitado**. Nadie puede escribir hasta que lo habilites.",
+        ephemeral=True,
+    )
+    log.info("deshabilitar-chat: desactivado por %s", interaction.user)
+
+
 @client.event
 async def on_ready():
     global MODO_AUTO_MP, _ARG_EMOJI_ID
@@ -8214,6 +8510,7 @@ async def on_ready():
     asyncio.create_task(_setup_canal_ios())
     asyncio.create_task(_setup_canal_flourite())
     asyncio.create_task(_setup_canal_diamantes())
+    asyncio.create_task(_setup_canal_chat())
     asyncio.create_task(_configurar_canal_anuncios())
     asyncio.create_task(_configurar_canal_general())
     asyncio.create_task(_configurar_canal_ventas())
