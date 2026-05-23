@@ -2769,13 +2769,24 @@ async def _acreditar_pago_aprobado(
             )
             await _enviar_entrega_ios(user, pack)
         else:
-            # Proxy → enviar key por DM (solo si fue registrada en Telegram)
+            # Proxy → enviar key por DM
             dias_proxy = int(pack.creditos)
             if not _key_registrada:
+                # Telegram falló → avisar al usuario que el pago fue aprobado
+                # pero que la key llegará en minutos (admin usará /enviar-key)
                 log.error(
                     "KEY NO ENTREGADA — no se registró en Telegram. Op=%s user=%s key=%s",
                     op_id, discord_id, proxy_key,
                 )
+                try:
+                    await user.send(
+                        f"✅ **¡Tu pago fue aprobado!** — operación `#{op_id}`\n\n"
+                        f"Estamos configurando tu key de **{pack.nombre}**. "
+                        f"La recibirás por aquí en los próximos minutos. 🕐\n\n"
+                        f"Si no la recibís en 10 minutos, contactá a un admin."
+                    )
+                except Exception:
+                    log.exception("No pude avisar al usuario %s por DM (Telegram falló)", discord_id)
                 return
             embed_key = discord.Embed(
                 title="✅ ¡Pago aprobado! Tu key de proxy está lista",
@@ -2888,15 +2899,15 @@ class AprobarPagoView(_SafeViewMixin, discord.ui.View):
                     return m.group(1)
         return ""
 
-    def _resolver_op(self, op_id: str) -> dict:
-        """Recupera el dict de la operación desde memoria o DB."""
+    def _resolver_op(self, op_id: str, interaction: discord.Interaction | None = None) -> dict:
+        """Recupera el dict de la operación desde memoria, DB o embed del mensaje."""
         if self.op:
             return self.op
         with _pending_binance_lock:
             cached = _pending_binance.get(op_id)
         if cached:
             return cached
-        # Fallback: reconstruir desde la DB
+        # Fallback 1: reconstruir desde la DB
         row = database.get_pending_payment(op_id)
         if row:
             pack_obj = payments.PACKS.get(row["pack_id"])
@@ -2908,6 +2919,52 @@ class AprobarPagoView(_SafeViewMixin, discord.ui.View):
                 "username":   row["username"],
                 "metodo":     row["metodo"],
             }
+        # Fallback 2: parsear los campos del embed directamente
+        # (útil cuando la operación NO está en la DB de esta instancia
+        #  pero el mensaje fue creado por otra instancia del bot)
+        msg = (interaction.message if interaction else None)
+        if msg and msg.embeds:
+            import re as _re2
+            embed = msg.embeds[0]
+            discord_id = ""
+            user_id = 0
+            pack_obj = None
+            username = ""
+            metodo = "naranjax" if op_id.startswith("NX-") else "binance"
+            for field in (embed.fields or []):
+                fname = (field.name or "").lower()
+                fval  = field.value or ""
+                if "uario" in fname or "user" in fname:
+                    # "Username (` 1234567890 `)" o "`1234567890`"
+                    m = _re2.search(r"`(\d{15,20})`", fval)
+                    if m:
+                        discord_id = m.group(1)
+                        try:
+                            user_id = int(discord_id)
+                        except ValueError:
+                            pass
+                    um = _re2.match(r"^(.+?)\s+\(", fval)
+                    if um:
+                        username = um.group(1).strip()
+                if "ack" in fname or "pack" in fname:
+                    for p in payments.PACKS.values():
+                        if p.nombre in fval:
+                            pack_obj = p
+                            break
+            if discord_id and pack_obj:
+                log.info(
+                    "AprobarPagoView: operación %s reconstruida desde embed "
+                    "(discord_id=%s pack=%s)",
+                    op_id, discord_id, pack_obj.id,
+                )
+                return {
+                    "discord_id": discord_id,
+                    "user_id":    user_id,
+                    "pack":       pack_obj,
+                    "channel_id": msg.channel.id if msg.channel else 0,
+                    "username":   username,
+                    "metodo":     metodo,
+                }
         return {}
 
     # ── Botón Aprobar ──────────────────────────────────────────────────────
@@ -2922,7 +2979,7 @@ class AprobarPagoView(_SafeViewMixin, discord.ui.View):
 
         # Recuperar op_id y op (funciona tanto en sesión viva como tras reinicio)
         op_id = self._resolver_op_id(interaction)
-        op    = self._resolver_op(op_id)
+        op    = self._resolver_op(op_id, interaction)
 
         if not op_id or not op:
             await _safe_defer(interaction, ephemeral=True)
@@ -2962,7 +3019,7 @@ class AprobarPagoView(_SafeViewMixin, discord.ui.View):
             return
 
         op_id = self._resolver_op_id(interaction)
-        op    = self._resolver_op(op_id)
+        op    = self._resolver_op(op_id, interaction)
 
         if not op_id:
             await _safe_defer(interaction, ephemeral=True)
