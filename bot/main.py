@@ -4324,10 +4324,7 @@ async def _postear_panel_postulaciones() -> None:
 
     # Si no existe, crearlo
     if canal is None:
-        category = discord.utils.find(
-            lambda c: c.name.upper() in ("TICKETS", "SOPORTE", "SUPPORT", "TICKET", "INFO", "INFORMACIÓN"),
-            guild.categories,
-        )
+        category = await _obtener_o_crear_categoria(guild, _CAT_INFORMACION)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(
                 view_channel=True, send_messages=False, add_reactions=False
@@ -5730,8 +5727,9 @@ CANAL_SENSI_ID: int | None = None   # se rellena en on_ready al crear/encontrar 
 CANAL_PROXY_ID   = 1486438612990951646
 
 # Nombres exactos de las categorías gestionadas por el bot
-_CAT_STORE     = "🛒 STORE"
-_CAT_COMUNIDAD = "💬 COMUNIDAD"
+_CAT_STORE       = "🛒 STORE"
+_CAT_COMUNIDAD   = "💬 COMUNIDAD"
+_CAT_INFORMACION = "ℹ️ INFORMACIÓN"
 
 
 async def _obtener_o_crear_categoria(
@@ -5753,8 +5751,9 @@ async def _obtener_o_crear_categoria(
 
 async def _reorganizar_categorias() -> None:
     """
-    Crea las categorías STORE y COMUNIDAD si no existen y mueve los canales
-    correspondientes a ellas.
+    Crea las categorías STORE, COMUNIDAD e INFORMACIÓN si no existen,
+    mueve los canales correspondientes, sube STORE al inicio y borra
+    cualquier canal suelto llamado 'regedits'.
     """
     await client.wait_until_ready()
     guild = _resolver_guild()
@@ -5763,14 +5762,15 @@ async def _reorganizar_categorias() -> None:
 
     cat_store     = await _obtener_o_crear_categoria(guild, _CAT_STORE)
     cat_comunidad = await _obtener_o_crear_categoria(guild, _CAT_COMUNIDAD)
+    cat_info      = await _obtener_o_crear_categoria(guild, _CAT_INFORMACION)
 
-    # Canales que van a STORE (por fragmento de nombre)
+    # ── Fragmentos de nombre por categoría ────────────────────────────────
     nombres_store = [
         "proxy-marke", "android-regedit", "ios-archivos",
         "flourite", "diamantes-ff", "sensis-xitadas",
     ]
-    # Canales que van a COMUNIDAD
-    nombres_comunidad = ["chat"]
+    nombres_comunidad  = ["chat"]
+    nombres_informacion = ["info-referido", "referido", "postulacion", "postulaciones"]
 
     async def _mover(ch: discord.TextChannel, cat: discord.CategoryChannel, tag: str):
         if ch.category_id == cat.id:
@@ -5781,16 +5781,37 @@ async def _reorganizar_categorias() -> None:
         except Exception as exc:
             log.warning("_reorganizar_categorias: no pude mover #%s: %s", ch.name, exc)
 
+    # ── Borrar canal llamado exactamente "regedits" (no android-regedits) ──
+    for ch in list(guild.text_channels):
+        ch_plain = ch.name.lower().replace("・", "").replace("🎮", "").replace("📱", "").strip()
+        if ch_plain == "regedits" and "android" not in ch.name.lower():
+            try:
+                await ch.delete(reason="Limpieza automática — canal regedits obsoleto")
+                log.info("_reorganizar_categorias: canal #%s eliminado", ch.name)
+            except Exception as exc:
+                log.warning("_reorganizar_categorias: no pude borrar #%s: %s", ch.name, exc)
+
     if cat_store:
         for ch in guild.text_channels:
             if any(frag in ch.name.lower() for frag in nombres_store):
                 await _mover(ch, cat_store, _CAT_STORE)
+        # Subir la categoría STORE al principio del servidor
+        try:
+            await cat_store.edit(position=0, reason="STORE al inicio")
+            log.info("_reorganizar_categorias: categoría '%s' movida al inicio", _CAT_STORE)
+        except Exception as exc:
+            log.warning("_reorganizar_categorias: no pude reposicionar STORE: %s", exc)
 
     if cat_comunidad:
         for ch in guild.text_channels:
             ch_plain = ch.name.lower().replace("💬", "").replace("・", "").strip()
             if ch_plain in nombres_comunidad:
                 await _mover(ch, cat_comunidad, _CAT_COMUNIDAD)
+
+    if cat_info:
+        for ch in guild.text_channels:
+            if any(frag in ch.name.lower() for frag in nombres_informacion):
+                await _mover(ch, cat_info, _CAT_INFORMACION)
 
     log.info("_reorganizar_categorias: listo")
 
@@ -5902,8 +5923,7 @@ async def _setup_canal_info_referidos() -> None:
 
     # Crear si no existe
     if canal is None:
-        proxy_ch = client.get_channel(CANAL_PROXY_ID)
-        categoria = getattr(proxy_ch, "category", None)
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_INFORMACION)
         try:
             canal = await guild.create_text_channel(
                 "📢・info-referidos",
