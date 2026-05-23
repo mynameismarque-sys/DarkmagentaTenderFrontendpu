@@ -26,7 +26,7 @@ try:
     from telethon import TelegramClient
     from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
     from telethon.sessions import StringSession
-    from telethon.tl.functions.auth import TerminateAllAuthorizationsRequest
+    from telethon.tl.functions.auth import ResetAuthorizationsRequest
 except ImportError as e:
     print(f"ERROR: Falta una dependencia: {e}")
     print("Corré: pip install telethon pysocks")
@@ -127,7 +127,7 @@ async def main() -> None:
 
     print("\nTerminando todas las otras sesiones activas...")
     try:
-        await client(TerminateAllAuthorizationsRequest())
+        await client(ResetAuthorizationsRequest())
         print("✅ Todas las otras sesiones terminadas.")
     except Exception as e:
         print(f"⚠  No se pudieron terminar otras sesiones: {e}")
