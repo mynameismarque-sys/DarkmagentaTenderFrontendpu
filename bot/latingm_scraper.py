@@ -399,6 +399,114 @@ async def _login(page, shop_user: str, shop_pass: str) -> bool:
 # Extracción del PIN
 # ─────────────────────────────────────────────────────────────────────────────
 
+_REDEEMPINS_PIN_SELECTORS = [
+    "input[placeholder='Código Pin']",
+    "input[placeholder*='Pin']",
+    "input[placeholder*='PIN']",
+    "input[placeholder*='Código']",
+    "input[placeholder*='codigo']",
+    "input[name*='pin']",
+    "input[id*='pin']",
+    "input[name*='code']",
+    "input[id*='code']",
+    "input[type='text']",
+]
+
+
+async def _insertar_pin_redeempins(page, pin: str) -> bool:
+    """
+    Intenta insertar el PIN en el campo de redeempins.com usando 4 estrategias.
+    Devuelve True si lo logró, False si todas fallaron.
+    """
+    # Esperar a que la página termine de cargar completamente
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(1_500)
+
+    # Esperar a que el campo aparezca (timeout más generoso)
+    for sel in _REDEEMPINS_PIN_SELECTORS:
+        try:
+            await page.wait_for_selector(sel, timeout=6_000, state="visible")
+            break
+        except Exception:
+            continue
+
+    for sel in _REDEEMPINS_PIN_SELECTORS:
+        try:
+            el = page.locator(sel).first
+            if not await el.is_visible(timeout=3_000):
+                continue
+
+            # ── Estrategia 1: click + fill ────────────────────────────────
+            try:
+                await el.click(timeout=3_000)
+                await page.wait_for_timeout(300)
+                await el.fill(pin, timeout=5_000)
+                await page.wait_for_timeout(300)
+                valor = await el.input_value(timeout=2_000)
+                if valor.strip():
+                    log.info("_insertar_pin_redeempins: ✅ estrategia fill — %s | valor=%s", sel, valor[:20])
+                    return True
+            except Exception:
+                pass
+
+            # ── Estrategia 2: triple-click (seleccionar todo) + type ──────
+            try:
+                await el.click(click_count=3, timeout=3_000)
+                await page.wait_for_timeout(200)
+                await el.press_sequentially(pin, delay=30)
+                await page.wait_for_timeout(300)
+                valor = await el.input_value(timeout=2_000)
+                if valor.strip():
+                    log.info("_insertar_pin_redeempins: ✅ estrategia press_sequentially — %s", sel)
+                    return True
+            except Exception:
+                pass
+
+            # ── Estrategia 3: Ctrl+A + type (limpiar y escribir) ─────────
+            try:
+                await el.click(timeout=3_000)
+                await page.keyboard.press("Control+a")
+                await page.wait_for_timeout(100)
+                await page.keyboard.type(pin, delay=25)
+                await page.wait_for_timeout(300)
+                valor = await el.input_value(timeout=2_000)
+                if valor.strip():
+                    log.info("_insertar_pin_redeempins: ✅ estrategia keyboard.type — %s", sel)
+                    return True
+            except Exception:
+                pass
+
+            # ── Estrategia 4: JS eval — forzar valor + disparar eventos ──
+            try:
+                await el.evaluate(
+                    """(el, v) => {
+                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                        nativeInputValueSetter.call(el, v);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    pin,
+                )
+                await page.wait_for_timeout(300)
+                valor = await el.input_value(timeout=2_000)
+                if valor.strip():
+                    log.info("_insertar_pin_redeempins: ✅ estrategia JS eval — %s", sel)
+                    return True
+            except Exception:
+                pass
+
+        except Exception as exc:
+            log.debug("_insertar_pin_redeempins: selector %s falló: %s", sel, exc)
+            continue
+
+    log.warning("_insertar_pin_redeempins: todas las estrategias fallaron para PIN=%s", pin[:20])
+    return False
+
+
 async def _extraer_pin_de_pedido(page) -> str:
     """Intenta extraer el PIN/licencia del pedido usando múltiples estrategias."""
     pin = ""
@@ -1114,30 +1222,9 @@ async def comprar_diamantes(
 
             # ── 15. redeempins.com — Paso 1: insertar PIN ────────────────────
             await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)
-            await page.wait_for_timeout(2_000)
             log.info("redeempins: en formulario paso 1 — URL=%s", page.url)
 
-            pin_inserted = False
-            for sel in [
-                "input[placeholder='Código Pin']",
-                "input[placeholder*='Pin']",
-                "input[placeholder*='PIN']",
-                "input[placeholder*='Código']",
-                "input[placeholder*='codigo']",
-                "input[name*='pin']", "input[id*='pin']",
-                "input[name*='code']", "input[id*='code']",
-                "input[type='text']",
-            ]:
-                try:
-                    el = page.locator(sel).first
-                    if await el.is_visible(timeout=2_000):
-                        await el.fill(pin)
-                        pin_inserted = True
-                        log.info("redeempins: PIN insertado — %s", sel)
-                        break
-                except Exception:
-                    continue
-
+            pin_inserted = await _insertar_pin_redeempins(page, pin)
             if not pin_inserted:
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
@@ -1361,24 +1448,9 @@ async def completar_pedido_existente(
 
             # ── 4. redeempins.com — Paso 1 ────────────────────────────────────
             await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)
-            await page.wait_for_timeout(2_000)
+            log.info("completar_pedido: redeempins paso 1 — URL=%s", page.url)
 
-            pin_inserted = False
-            for sel in [
-                "input[placeholder='Código Pin']", "input[placeholder*='Pin']",
-                "input[placeholder*='PIN']", "input[placeholder*='Código']",
-                "input[name*='pin']", "input[id*='pin']",
-                "input[name*='code']", "input[type='text']",
-            ]:
-                try:
-                    el = page.locator(sel).first
-                    if await el.is_visible(timeout=2_000):
-                        await el.fill(pin)
-                        pin_inserted = True
-                        break
-                except Exception:
-                    continue
-
+            pin_inserted = await _insertar_pin_redeempins(page, pin)
             if not pin_inserted:
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com. PIN: `{pin}`"
@@ -1692,30 +1764,9 @@ async def canjear_pin_directo(
 
             # ── Paso 1: insertar PIN ──────────────────────────────────────────
             await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)
-            await page.wait_for_timeout(2_000)
             log.info("canjear_pin_directo: redeempins cargado — URL=%s", page.url)
 
-            pin_inserted = False
-            for sel in [
-                "input[placeholder='Código Pin']",
-                "input[placeholder*='Pin']",
-                "input[placeholder*='PIN']",
-                "input[placeholder*='Código']",
-                "input[placeholder*='codigo']",
-                "input[name*='pin']", "input[id*='pin']",
-                "input[name*='code']", "input[id*='code']",
-                "input[type='text']",
-            ]:
-                try:
-                    el = page.locator(sel).first
-                    if await el.is_visible(timeout=2_000):
-                        await el.fill(pin)
-                        pin_inserted = True
-                        log.info("canjear_pin_directo: PIN insertado — %s", sel)
-                        break
-                except Exception:
-                    continue
-
+            pin_inserted = await _insertar_pin_redeempins(page, pin)
             if not pin_inserted:
                 screenshot = await page.screenshot()
                 return screenshot, f"❌ No pude insertar el PIN en redeempins.com.\nPIN: `{pin}`"
