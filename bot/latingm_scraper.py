@@ -1512,3 +1512,213 @@ async def completar_pedido_existente(
             return screenshot, f"❌ Error al completar el pedido: {exc}"
         finally:
             await browser.close()
+
+
+async def canjear_pin_directo(
+    pin: str,
+    id_freefire: str,
+    diamonds: int,
+) -> tuple[bytes | None, str]:
+    """
+    Canjea un PIN ya conocido directamente en redeempins.com.
+    Útil para reintentar cuando el PIN fue extraído pero el canje falló.
+    Devuelve (screenshot, mensaje).
+    """
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=_LATINGM_BROWSER_ARGS,
+            env=_get_chromium_env(),
+        )
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="es-AR",
+            timezone_id="America/Argentina/Buenos_Aires",
+        )
+        await context.add_init_script(_STEALTH_JS)
+        page = await context.new_page()
+
+        try:
+            log.info("canjear_pin_directo: pin=%s ff=%s diamonds=%d", pin, id_freefire, diamonds)
+
+            # ── Paso 1: insertar PIN ──────────────────────────────────────────
+            await _goto_cf(page, REDEEMPINS_URL, timeout=25_000)
+            await page.wait_for_timeout(2_000)
+            log.info("canjear_pin_directo: redeempins cargado — URL=%s", page.url)
+
+            pin_inserted = False
+            for sel in [
+                "input[placeholder='Código Pin']",
+                "input[placeholder*='Pin']",
+                "input[placeholder*='PIN']",
+                "input[placeholder*='Código']",
+                "input[placeholder*='codigo']",
+                "input[name*='pin']", "input[id*='pin']",
+                "input[name*='code']", "input[id*='code']",
+                "input[type='text']",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.fill(pin)
+                        pin_inserted = True
+                        log.info("canjear_pin_directo: PIN insertado — %s", sel)
+                        break
+                except Exception:
+                    continue
+
+            if not pin_inserted:
+                screenshot = await page.screenshot()
+                return screenshot, f"❌ No pude insertar el PIN en redeempins.com.\nPIN: `{pin}`"
+
+            for sel in [
+                "button:has-text('Canjear')", "button:has-text('CANJEAR')",
+                "button:has-text('Redeem')", "button[type='submit']",
+                "input[type='submit']",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.click(timeout=8_000)
+                        log.info("canjear_pin_directo: Canjear paso 1 — %s", sel)
+                        break
+                except Exception:
+                    continue
+
+            # ── Esperar formulario paso 2 ─────────────────────────────────────
+            log.info("canjear_pin_directo: esperando formulario paso 2...")
+            try:
+                await page.wait_for_selector(
+                    "input[placeholder*='Nombre'], input[placeholder*='nombre'], "
+                    "input[name*='name'], input[placeholder*='Nacimiento']",
+                    timeout=20_000,
+                )
+            except Exception:
+                await page.wait_for_timeout(5_000)
+            log.info("canjear_pin_directo: formulario paso 2 — URL=%s", page.url)
+
+            # ── Paso 2: datos del jugador ─────────────────────────────────────
+            for sel in [
+                "input[placeholder='Nombre Completo']",
+                "input[placeholder*='Nombre']", "input[placeholder*='nombre']",
+                "input[name*='name']", "input[id*='name']",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.fill(_REDEEMPINS_NOMBRE)
+                        log.info("canjear_pin_directo: Nombre llenado")
+                        break
+                except Exception:
+                    continue
+
+            for sel in [
+                "input[placeholder='Fecha de Nacimiento']",
+                "input[placeholder*='Nacimiento']", "input[placeholder*='nacimiento']",
+                "input[placeholder*='Fecha']",
+                "input[name*='birth']", "input[id*='birth']",
+                "input[type='date']",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.fill(_REDEEMPINS_FECHA)
+                        log.info("canjear_pin_directo: Fecha llenada")
+                        break
+                except Exception:
+                    continue
+
+            for sel in [
+                "select[name*='nationalit']", "select[id*='nationalit']",
+                "select[name*='nation']", "select[name*='pais']",
+                "select[name*='country']", "select[id*='country']",
+                "select",
+            ]:
+                try:
+                    for el in await page.locator(sel).all():
+                        if not await el.is_visible(timeout=1_500):
+                            continue
+                        for val in ["Argentina", "AR", "argentina"]:
+                            try:
+                                await el.select_option(label=val, timeout=2_000)
+                                log.info("canjear_pin_directo: Argentina seleccionada")
+                                break
+                            except Exception:
+                                try:
+                                    await el.select_option(value=val, timeout=2_000)
+                                    break
+                                except Exception:
+                                    pass
+                        break
+                except Exception:
+                    continue
+
+            for sel in [
+                "input[placeholder*='ID de usuario']",
+                "input[placeholder*='id de usuario']",
+                "input[placeholder*='usuario']",
+                "input[placeholder*='jugador']",
+                "input[placeholder*='Player']", "input[placeholder*='player']",
+                "input[name*='player']", "input[id*='player']",
+                "input[name*='uid']", "input[id*='uid']",
+                "input[name*='user']", "input[id*='user']",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.fill(id_freefire)
+                        log.info("canjear_pin_directo: ID jugador llenado = %s", id_freefire)
+                        break
+                except Exception:
+                    continue
+
+            for sel in ["input[type='checkbox']", "input[name*='terms']", "input[id*='terms']"]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        if not await el.is_checked():
+                            await el.check()
+                        log.info("canjear_pin_directo: T&C marcado")
+                        break
+                except Exception:
+                    continue
+
+            await page.wait_for_timeout(500)
+
+            for sel in [
+                "button:has-text('¡Canjear Ahora!')",
+                "button:has-text('Canjear Ahora')",
+                "button:has-text('CANJEAR AHORA')",
+                "button:has-text('¡Canjear ahora!')",
+                "button[type='submit']", "input[type='submit']",
+                "button:has-text('Canjear')", "button:has-text('Redeem')",
+            ]:
+                try:
+                    el = page.locator(sel).first
+                    if await el.is_visible(timeout=2_000):
+                        await el.click(timeout=8_000)
+                        log.info("canjear_pin_directo: ¡Canjear Ahora! — %s", sel)
+                        break
+                except Exception:
+                    continue
+
+            await page.wait_for_timeout(5_000)
+            log.info("canjear_pin_directo: canje enviado — URL=%s", page.url)
+
+            screenshot = await page.screenshot(full_page=False)
+            return screenshot, f"✅ ¡{diamonds} 💎 canjeados con éxito!\n🔑 PIN: `{pin}`"
+
+        except Exception as exc:
+            log.exception("Error en canjear_pin_directo (pin=%s, ff=%s)", pin, id_freefire)
+            try:
+                screenshot = await page.screenshot()
+            except Exception:
+                screenshot = None
+            return screenshot, f"❌ Error al canjear el PIN: {exc}"
+        finally:
+            await browser.close()

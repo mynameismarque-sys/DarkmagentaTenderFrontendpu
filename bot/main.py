@@ -5471,6 +5471,126 @@ async def diamantes_manual(
 
 
 @tree.command(
+    name="reenviar-diamantes",
+    description="(Admin) Canjear un PIN ya conocido en redeempins.com cuando el canje automático falló",
+)
+@app_commands.describe(
+    usuario="Usuario que debe recibir los diamantes",
+    pin="El PIN obtenido de latingm.com (formato XXXX-XXXX-XXXX-XXXX-XXXX)",
+    id_freefire="ID de Free Fire del comprador",
+    cantidad="Cantidad de diamantes del paquete (110, 341, 572, 1166, 2398 o 6160)",
+)
+async def reenviar_diamantes_cmd(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    pin: str,
+    id_freefire: str,
+    cantidad: int,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    validos = list(_DIAM_PRECIOS.keys())
+    if cantidad not in validos:
+        await interaction.followup.send(
+            f"❌ Cantidad inválida. Packs válidos: {', '.join(str(v) for v in validos)}",
+            ephemeral=True,
+        )
+        return
+
+    pin_clean = pin.strip().upper()
+
+    log.info(
+        "REENVIAR DIAMANTES — admin=%s usuario=%s pin=%s diamonds=%d id_ff=%s",
+        interaction.user, usuario, pin_clean, cantidad, id_freefire,
+    )
+
+    canal_ventas = await _obtener_canal_ventas()
+    if canal_ventas:
+        embed_log = discord.Embed(
+            title="🔁 Reenvío de Diamantes (PIN directo)",
+            description=(
+                f"👤 **Admin:** {interaction.user.mention}\n"
+                f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
+                f"💎 **Paquete:** {cantidad:,} Diamantes\n"
+                f"🎮 **ID Free Fire:** `{id_freefire}`\n"
+                f"🔑 **PIN:** `{pin_clean}`\n\n"
+                "⏳ Iniciando canje en redeempins.com..."
+            ),
+            color=0x3498DB,
+        )
+        await canal_ventas.send(embed=embed_log)
+
+    await interaction.followup.send(
+        f"⏳ Iniciando canje del PIN `{pin_clean}` para {usuario.mention}...\n"
+        "El resultado llegará al usuario por DM y se notificará en #ventas.",
+        ephemeral=True,
+    )
+
+    async def _tarea_reenvio():
+        try:
+            screenshot, resultado = await latingm_scraper.canjear_pin_directo(
+                pin=pin_clean,
+                id_freefire=id_freefire,
+                diamonds=cantidad,
+            )
+            exito = resultado.startswith("✅")
+
+            # Notificar al usuario por DM
+            try:
+                dm = await usuario.create_dm()
+                if screenshot:
+                    await dm.send(
+                        content=resultado,
+                        file=discord.File(
+                            fp=__import__("io").BytesIO(screenshot),
+                            filename="reenvio_resultado.png",
+                        ),
+                    )
+                else:
+                    await dm.send(resultado)
+            except discord.Forbidden:
+                log.warning("reenviar_diamantes: DM bloqueado para %s", usuario)
+
+            # Notificar en #ventas
+            try:
+                canal = await _obtener_canal_ventas()
+                if canal:
+                    color = 0x2ECC71 if exito else 0xE74C3C
+                    embed_res = discord.Embed(
+                        title="✅ Reenvío completado" if exito else "❌ Reenvío fallido",
+                        description=(
+                            f"👤 **Admin:** {interaction.user.mention}\n"
+                            f"🎯 **Comprador:** {usuario.mention}\n"
+                            f"💎 **Diamantes:** {cantidad:,}\n"
+                            f"🎮 **ID FF:** `{id_freefire}`\n"
+                            f"🔑 **PIN:** `{pin_clean}`\n\n"
+                            f"{resultado}"
+                        ),
+                        color=color,
+                    )
+                    if screenshot:
+                        await canal.send(
+                            embed=embed_res,
+                            file=discord.File(
+                                fp=__import__("io").BytesIO(screenshot),
+                                filename="reenvio_resultado.png",
+                            ),
+                        )
+                    else:
+                        await canal.send(embed=embed_res)
+            except Exception:
+                log.exception("reenviar_diamantes: error posteando en #ventas")
+
+        except Exception:
+            log.exception("reenviar_diamantes: error en tarea de reenvío")
+
+    asyncio.create_task(_tarea_reenvio())
+
+
+@tree.command(
     name="enviar-key",
     description="(Admin) Enviar una key de proxy por DM a un usuario",
 )
