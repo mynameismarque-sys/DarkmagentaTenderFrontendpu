@@ -5472,18 +5472,16 @@ async def diamantes_manual(
 
 @tree.command(
     name="reenviar-diamantes",
-    description="(Admin) Canjear un PIN ya conocido en redeempins.com cuando el canje automático falló",
+    description="(Admin) Buscar el PIN del último pedido y canjear en redeempins cuando el automático falló",
 )
 @app_commands.describe(
     usuario="Usuario que debe recibir los diamantes",
-    pin="El PIN obtenido de latingm.com (formato XXXX-XXXX-XXXX-XXXX-XXXX)",
     id_freefire="ID de Free Fire del comprador",
-    cantidad="Cantidad de diamantes del paquete (110, 341, 572, 1166, 2398 o 6160)",
+    cantidad="Cantidad de diamantes (110, 341, 572, 1166, 2398 o 6160)",
 )
 async def reenviar_diamantes_cmd(
     interaction: discord.Interaction,
     usuario: discord.Member,
-    pin: str,
     id_freefire: str,
     cantidad: int,
 ):
@@ -5500,39 +5498,74 @@ async def reenviar_diamantes_cmd(
         )
         return
 
-    pin_clean = pin.strip().upper()
-
     log.info(
-        "REENVIAR DIAMANTES — admin=%s usuario=%s pin=%s diamonds=%d id_ff=%s",
-        interaction.user, usuario, pin_clean, cantidad, id_freefire,
+        "REENVIAR DIAMANTES — admin=%s usuario=%s diamonds=%d id_ff=%s",
+        interaction.user, usuario, cantidad, id_freefire,
     )
 
     canal_ventas = await _obtener_canal_ventas()
     if canal_ventas:
         embed_log = discord.Embed(
-            title="🔁 Reenvío de Diamantes (PIN directo)",
+            title="🔁 Reenvío de Diamantes",
             description=(
                 f"👤 **Admin:** {interaction.user.mention}\n"
                 f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
                 f"💎 **Paquete:** {cantidad:,} Diamantes\n"
-                f"🎮 **ID Free Fire:** `{id_freefire}`\n"
-                f"🔑 **PIN:** `{pin_clean}`\n\n"
-                "⏳ Iniciando canje en redeempins.com..."
+                f"🎮 **ID Free Fire:** `{id_freefire}`\n\n"
+                "🔍 Buscando PIN del último pedido en latingm.com..."
             ),
             color=0x3498DB,
         )
         await canal_ventas.send(embed=embed_log)
 
     await interaction.followup.send(
-        f"⏳ Iniciando canje del PIN `{pin_clean}` para {usuario.mention}...\n"
+        f"⏳ Buscando el PIN del pedido de **{cantidad:,} 💎** en latingm.com y canjeando para {usuario.mention}...\n"
         "El resultado llegará al usuario por DM y se notificará en #ventas.",
         ephemeral=True,
     )
 
     async def _tarea_reenvio():
+        import io as _io
+        pin_encontrado = ""
+        order_id_encontrado = ""
         try:
+            # ── 1. Buscar el PIN automáticamente en latingm.com ───────────────
+            pin_encontrado, order_id_encontrado = await latingm_scraper.obtener_pin_de_ultimo_pedido(cantidad)
+
+            if not pin_encontrado:
+                msg_fallo = (
+                    f"❌ No encontré el PIN del pedido de {cantidad:,} 💎 en latingm.com.\n"
+                    "Puede que el pedido aún no esté completado o el PIN no esté visible."
+                )
+                try:
+                    dm = await usuario.create_dm()
+                    await dm.send(msg_fallo)
+                except discord.Forbidden:
+                    pass
+                try:
+                    canal = await _obtener_canal_ventas()
+                    if canal:
+                        await canal.send(embed=discord.Embed(
+                            title="❌ Reenvío fallido — PIN no encontrado",
+                            description=(
+                                f"👤 **Admin:** {interaction.user.mention}\n"
+                                f"🎯 **Comprador:** {usuario.mention}\n"
+                                f"💎 **Diamantes:** {cantidad:,}\n"
+                                f"🎮 **ID FF:** `{id_freefire}`\n\n"
+                                "No se encontró el PIN en latingm.com."
+                            ),
+                            color=0xE74C3C,
+                        ))
+                except Exception:
+                    pass
+                log.warning("reenviar_diamantes: PIN no encontrado para %d diamantes", cantidad)
+                return
+
+            log.info("reenviar_diamantes: PIN encontrado=%s order=%s", pin_encontrado, order_id_encontrado)
+
+            # ── 2. Canjear el PIN en redeempins.com ───────────────────────────
             screenshot, resultado = await latingm_scraper.canjear_pin_directo(
-                pin=pin_clean,
+                pin=pin_encontrado,
                 id_freefire=id_freefire,
                 diamonds=cantidad,
             )
@@ -5545,7 +5578,7 @@ async def reenviar_diamantes_cmd(
                     await dm.send(
                         content=resultado,
                         file=discord.File(
-                            fp=__import__("io").BytesIO(screenshot),
+                            fp=_io.BytesIO(screenshot),
                             filename="reenvio_resultado.png",
                         ),
                     )
@@ -5566,8 +5599,9 @@ async def reenviar_diamantes_cmd(
                             f"🎯 **Comprador:** {usuario.mention}\n"
                             f"💎 **Diamantes:** {cantidad:,}\n"
                             f"🎮 **ID FF:** `{id_freefire}`\n"
-                            f"🔑 **PIN:** `{pin_clean}`\n\n"
-                            f"{resultado}"
+                            f"🔑 **PIN:** `{pin_encontrado}`\n"
+                            + (f"📋 **Pedido:** `#{order_id_encontrado}`\n" if order_id_encontrado else "")
+                            + f"\n{resultado}"
                         ),
                         color=color,
                     )
@@ -5575,7 +5609,7 @@ async def reenviar_diamantes_cmd(
                         await canal.send(
                             embed=embed_res,
                             file=discord.File(
-                                fp=__import__("io").BytesIO(screenshot),
+                                fp=_io.BytesIO(screenshot),
                                 filename="reenvio_resultado.png",
                             ),
                         )

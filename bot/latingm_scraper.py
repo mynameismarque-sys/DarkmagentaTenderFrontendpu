@@ -1514,6 +1514,151 @@ async def completar_pedido_existente(
             await browser.close()
 
 
+async def obtener_pin_de_ultimo_pedido(diamonds: int) -> tuple[str, str]:
+    """
+    Busca el PIN del pedido completado más reciente que coincida con la
+    cantidad de diamantes indicada.
+    Hace login en latingm.com, recorre los últimos pedidos completados y
+    devuelve (pin, order_id). Si no encuentra nada devuelve ("", "").
+    """
+    paquete = PAQUETES.get(diamonds)
+    if not paquete:
+        log.warning("obtener_pin_de_ultimo_pedido: diamonds=%d no está en PAQUETES", diamonds)
+        return "", ""
+
+    base_str = str(paquete["base"])   # ej. "100" para 110 diamantes
+    shop_user = os.environ.get("SHOP_USER", "")
+    shop_pass = os.environ.get("SHOP_PASS", "")
+    if not shop_user or not shop_pass:
+        log.error("obtener_pin_de_ultimo_pedido: faltan SHOP_USER / SHOP_PASS")
+        return "", ""
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=_LATINGM_BROWSER_ARGS,
+            env=_get_chromium_env(),
+        )
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="es-AR",
+            timezone_id="America/Argentina/Buenos_Aires",
+        )
+        await context.add_init_script(_STEALTH_JS)
+        page = await context.new_page()
+
+        try:
+            ok = await _login(page, shop_user, shop_pass)
+            if not ok:
+                log.error("obtener_pin_de_ultimo_pedido: fallo de login")
+                return "", ""
+
+            # ── Cargar lista de pedidos ───────────────────────────────────────
+            for url_orders in [
+                f"{LATINGM_URL}mi-cuenta/pedidos/",
+                f"{LATINGM_URL}my-account/orders/",
+            ]:
+                try:
+                    await _goto_cf(page, url_orders, timeout=20_000)
+                    await page.wait_for_timeout(2_000)
+                    content = await _safe_content(page)
+                    if "completado" in content.lower() or "completed" in content.lower():
+                        break
+                except Exception:
+                    continue
+
+            # ── Recolectar links de pedidos completados ───────────────────────
+            order_links: list[tuple[str, str]] = []   # (href, order_id)
+            try:
+                rows = await page.locator("tr.woocommerce-orders-table__row, .woocommerce-orders-table tbody tr").all()
+                for row in rows:
+                    try:
+                        row_text = (await row.inner_text(timeout=1_500)).lower()
+                        if "completado" not in row_text and "completed" not in row_text:
+                            continue
+                        link_el = row.locator("a[href*='ver-pedido'], a[href*='view-order']").first
+                        href = await link_el.get_attribute("href", timeout=1_500)
+                        if href:
+                            m = re.search(r'/(?:ver-pedido|view-order)/(\d+)/', href)
+                            oid = m.group(1) if m else ""
+                            order_links.append((href, oid))
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Fallback: buscar todos los links ver-pedido en la página
+            if not order_links:
+                try:
+                    for el in await page.locator("a[href*='ver-pedido'], a[href*='view-order']").all():
+                        try:
+                            href = await el.get_attribute("href", timeout=500)
+                            if href:
+                                m = re.search(r'/(?:ver-pedido|view-order)/(\d+)/', href)
+                                oid = m.group(1) if m else ""
+                                order_links.append((href, oid))
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+            log.info("obtener_pin_de_ultimo_pedido: %d pedidos completados encontrados", len(order_links))
+
+            # ── Recorrer pedidos hasta encontrar el PIN correcto ──────────────
+            MAX_INTENTOS = min(len(order_links), 8)
+            for href, oid in order_links[:MAX_INTENTOS]:
+                try:
+                    await _goto_cf(page, href, timeout=20_000)
+                    await page.wait_for_timeout(2_500)
+
+                    # Verificar que el pedido contiene el paquete correcto
+                    body = await page.inner_text("body")
+                    body_lower = body.lower()
+                    # Buscar el base_str (ej. "100") en el contenido — puede
+                    # aparecer como "100 diamantes", "100+10", etc.
+                    if base_str not in body and str(diamonds) not in body:
+                        log.info("obtener_pin_de_ultimo_pedido: pedido %s no es de %s diamantes, saltando", oid, diamonds)
+                        continue
+
+                    pin = await _extraer_pin_de_pedido(page)
+                    if not pin:
+                        # Intentar también en Descargas
+                        for url_dl in [
+                            f"{LATINGM_URL}mi-cuenta/descargas/",
+                            f"{LATINGM_URL}my-account/downloads/",
+                        ]:
+                            try:
+                                await _goto_cf(page, url_dl, timeout=15_000)
+                                await page.wait_for_timeout(2_000)
+                                pin = await _extraer_pin_de_pedido(page)
+                                if pin:
+                                    break
+                            except Exception:
+                                continue
+
+                    if pin:
+                        log.info("obtener_pin_de_ultimo_pedido: PIN encontrado en pedido %s — %s", oid, pin)
+                        return pin, oid
+
+                except Exception as exc:
+                    log.warning("obtener_pin_de_ultimo_pedido: error en pedido %s: %s", oid, exc)
+                    continue
+
+            log.warning("obtener_pin_de_ultimo_pedido: no se encontró PIN para %d diamantes", diamonds)
+            return "", ""
+
+        except Exception:
+            log.exception("obtener_pin_de_ultimo_pedido: error general (diamonds=%d)", diamonds)
+            return "", ""
+        finally:
+            await browser.close()
+
+
 async def canjear_pin_directo(
     pin: str,
     id_freefire: str,
