@@ -34,6 +34,9 @@ from telethon.sessions import StringSession
 
 log = logging.getLogger("bot.telegram")
 
+# True cuando corre en el deployment de producción de Replit.
+IS_PRODUCTION: bool = bool(os.environ.get("REPLIT_DEPLOYMENT"))
+
 BOT_USERNAME   = "@FFPROXYCHEAT_BOT"
 STEP_TIMEOUT   = 20    # segundos por paso de conversación
 PING_INTERVAL  = 60    # ping periódico para detectar auth errors
@@ -234,15 +237,14 @@ def _make_client() -> TelegramClient:
     api_id      = int(os.environ["TELEGRAM_API_ID"])
     api_hash    = os.environ["TELEGRAM_API_HASH"]
     session_str = _read_best_session()
-    # PROXY_IP/PORT/USER/PASS son credenciales del servicio proxy que el bot
-    # VENDE (FF proxy cheat). No son un proxy de red para Telethon.
-    # El VM de Replit tiene acceso directo a Telegram → proxy=None siempre.
-    log.info("Telethon: creando cliente (sesión largo=%d, conexión directa).", len(session_str))
+    proxy       = _build_proxy()
+    conn_desc   = "con proxy" if proxy else "conexión directa"
+    log.info("Telethon: creando cliente (sesión largo=%d, %s).", len(session_str), conn_desc)
     return TelegramClient(
         StringSession(session_str),
         api_id,
         api_hash,
-        proxy=None,
+        proxy=proxy,
         auto_reconnect=True,
         connection_retries=10,
         retry_delay=3,
@@ -547,7 +549,10 @@ async def _ensure_ready() -> None:
     if is_ready():
         return
 
-    if _prod_has_session:
+    # Solo el bot de DESARROLLO cede cuando producción tiene la sesión activa.
+    # En producción, _prod_has_session indica conflicto temporal con dev —
+    # producción debe seguir intentando conectarse, no bloquearse.
+    if _prod_has_session and not IS_PRODUCTION:
         raise RuntimeError(_MSG_PROD_ACTIVA)
 
     log.info("Telethon: comando sin conexión activa — reconectando...")
@@ -556,7 +561,7 @@ async def _ensure_ready() -> None:
         if is_ready():
             return
 
-        if _prod_has_session:
+        if _prod_has_session and not IS_PRODUCTION:
             raise RuntimeError(_MSG_PROD_ACTIVA)
 
         for intento in range(1, 4):
@@ -572,7 +577,14 @@ async def _ensure_ready() -> None:
             except RuntimeError:
                 raise
             except AuthKeyDuplicatedError:
-                raise RuntimeError(_MSG_PROD_ACTIVA)
+                if not IS_PRODUCTION:
+                    raise RuntimeError(_MSG_PROD_ACTIVA)
+                # En producción: dev también está corriendo → esperar y reintentar
+                log.warning(
+                    "Telethon (prod): AuthKeyDuplicated en _ensure_ready (intento %d/3) "
+                    "— dev bot también activo, reintentando en 5s...", intento
+                )
+                await asyncio.sleep(5)
             except _BAD_AUTH_ERRORS as e:
                 raise RuntimeError(
                     f"❌ Sesión de Telegram inválida ({type(e).__name__}). "
