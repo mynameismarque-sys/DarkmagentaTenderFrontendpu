@@ -29,6 +29,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
+# True solo en el deployment de producción (variable seteada por Replit al deployar)
+IS_PRODUCTION: bool = bool(os.environ.get("REPLIT_DEPLOYMENT"))
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -5817,12 +5820,14 @@ async def reenviar_diamantes_cmd(
     usuario="Usuario que debe recibir la key",
     key="La key a enviar (ej: MARKEXXX123)",
     dias="Días de acceso de la key",
+    forzar="True = enviar solo por DM sin registrar en Telegram (para entregas urgentes cuando Telegram falla)",
 )
 async def enviar_key_cmd(
     interaction: discord.Interaction,
     usuario: discord.Member,
     key: str,
     dias: int,
+    forzar: bool = False,
 ):
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     if not _puede_registrar(interaction):
@@ -5830,35 +5835,59 @@ async def enviar_key_cmd(
         return
 
     key = key.strip()
+    telegram_ok = False
 
-    # ── Registrar la key en el bot de Telegram ANTES de entregarla ───────────
-    if not telegram_client.is_ready():
-        await interaction.followup.send(
-            "❌ El sistema Telegram no está disponible. Intentá en unos minutos.",
-            ephemeral=True,
+    # ── Registrar la key en el bot de Telegram ────────────────────────────────
+    if forzar:
+        # Modo forzado: saltar registro Telegram, entregar igual
+        log.warning(
+            "/enviar-key FORZADO (sin Telegram) — key=%s dias=%d para %s",
+            key, dias, usuario.id,
         )
+    elif not telegram_client.is_ready():
+        # Si el bot de DEV no tiene Telegram, sugerir usar forzar=True
+        if not IS_PRODUCTION:
+            await interaction.followup.send(
+                f"⚠️ Este bot está en **modo desarrollo** y no tiene acceso a Telegram "
+                f"(producción lo está usando).\n\n"
+                f"**Opción A** — Usá el mismo comando con `forzar:True` para enviar la key "
+                f"por DM sin registrarla en Telegram (entrega urgente). "
+                f"Después registrala manualmente cuando Telegram esté libre.\n\n"
+                f"**Opción B** — Republicá el proyecto para que el bot de producción maneje el comando.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "❌ El sistema Telegram no está disponible. Intentá en unos minutos.",
+                ephemeral=True,
+            )
         return
-
-    try:
-        await telegram_client.cmd_gen(key, dias)
-        log.info("Key registrada en Telegram: %s (%dd) para %s", key, dias, usuario.id)
-    except Exception as exc_gen:
-        log.exception("Error registrando key en Telegram para %s — key=%s", usuario.id, key)
-        await interaction.followup.send(
-            f"⚠️ No se pudo registrar la key `{key}` en el sistema de Telegram:\n"
-            f"```{exc_gen}```\n"
-            f"La key **no fue enviada** al usuario para evitar entregar una key inválida.\n"
-            f"Revisá el bot de Telegram y volvé a intentarlo.",
-            ephemeral=True,
-        )
-        asyncio.create_task(_log_key(
-            "gen_error", key, usuario.id,
-            dias=dias, metodo="Admin /enviar-key", error=str(exc_gen),
-            admin_id=interaction.user.id,
-        ))
-        return
+    else:
+        try:
+            await telegram_client.cmd_gen(key, dias)
+            telegram_ok = True
+            log.info("Key registrada en Telegram: %s (%dd) para %s", key, dias, usuario.id)
+        except Exception as exc_gen:
+            log.exception("Error registrando key en Telegram para %s — key=%s", usuario.id, key)
+            await interaction.followup.send(
+                f"⚠️ No se pudo registrar la key `{key}` en Telegram:\n"
+                f"```{exc_gen}```\n"
+                f"Si querés enviarla igual (sin registrar), volvé a correr el comando con `forzar:True`.",
+                ephemeral=True,
+            )
+            asyncio.create_task(_log_key(
+                "gen_error", key, usuario.id,
+                dias=dias, metodo="Admin /enviar-key", error=str(exc_gen),
+                admin_id=interaction.user.id,
+            ))
+            return
 
     # ── Entregar por DM ──────────────────────────────────────────────────────
+    nota_forzar = (
+        "\n\n⚠️ *Esta key fue enviada en modo urgente. Si no funciona aún, "
+        "contactá a un admin para activarla.*"
+        if forzar else ""
+    )
     embed_key = discord.Embed(
         title="✅ ¡Tu key de proxy está lista!",
         description=(
@@ -5873,30 +5902,32 @@ async def enviar_key_cmd(
             f"¡Muchísimas gracias por comprar en **Sensi Marke**! 🖤\n"
             f"Recordá estar atento al grupo:\n"
             f"https://chat.whatsapp.com/DQxndyWBG860vpaVcxam3s"
+            f"{nota_forzar}"
         ),
         color=0x2ECC71,
     )
+    estado_tg = "registrada en Telegram y " if telegram_ok else "enviada sin Telegram (forzar=True) — "
     try:
         await usuario.send(embed=embed_key)
-        log.info("Key enviada manualmente a %s (%s): %s (%dd)", usuario, usuario.id, key, dias)
+        log.info("Key enviada manualmente a %s (%s): %s (%dd) forzar=%s", usuario, usuario.id, key, dias, forzar)
         await interaction.followup.send(
-            f"✅ Key `{key}` registrada en Telegram y enviada por DM a {usuario.mention} ({dias}d).",
+            f"✅ Key `{key}` {estado_tg}enviada por DM a {usuario.mention} ({dias}d).",
             ephemeral=True,
         )
         asyncio.create_task(_log_key(
             "enviada_ok", key, usuario.id,
-            dias=dias, metodo="Admin /enviar-key",
+            dias=dias, metodo=f"Admin /enviar-key{'(forzar)' if forzar else ''}",
             admin_id=interaction.user.id,
         ))
     except discord.Forbidden:
         await interaction.followup.send(
-            f"⚠️ Key `{key}` registrada en Telegram OK, pero no pude enviar DM a {usuario.mention} — tiene los DMs cerrados.\n"
+            f"⚠️ Key `{key}` {estado_tg}pero no pude enviar DM a {usuario.mention} — tiene los DMs cerrados.\n"
             f"Entregala por otro medio ({dias}d).",
             ephemeral=True,
         )
         asyncio.create_task(_log_key(
             "dm_bloqueado", key, usuario.id,
-            dias=dias, metodo="Admin /enviar-key",
+            dias=dias, metodo=f"Admin /enviar-key{'(forzar)' if forzar else ''}",
             error="DM bloqueado — el usuario no acepta mensajes directos",
             admin_id=interaction.user.id,
         ))
@@ -5905,7 +5936,7 @@ async def enviar_key_cmd(
         await interaction.followup.send(f"❌ Error enviando DM: {exc}", ephemeral=True)
         asyncio.create_task(_log_key(
             "gen_error", key, usuario.id,
-            dias=dias, metodo="Admin /enviar-key", error=str(exc),
+            dias=dias, metodo=f"Admin /enviar-key{'(forzar)' if forzar else ''}", error=str(exc),
             admin_id=interaction.user.id,
         ))
 
