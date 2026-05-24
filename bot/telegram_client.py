@@ -134,12 +134,40 @@ def _read_best_session() -> str:
     IS_PRODUCTION = bool(os.environ.get("REPLIT_DEPLOYMENT"))
 
     def _clean(s: str) -> str:
-        return s.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        # Quitar espacios, saltos de línea, y caracteres no-base64url invisibles
+        import re as _re
+        s = s.strip()
+        s = s.replace("\n", "").replace("\r", "").replace(" ", "").replace("\t", "")
+        # Quitar caracteres Unicode invisibles (zero-width space, BOM, etc.)
+        s = _re.sub(r"[^\x20-\x7E]", "", s)
+        return s
+
+    def _normalize_b64(s: str) -> str:
+        """Devuelve 'prefijo + b64_data_puro + padding_correcto'.
+
+        Strips any existing '=' padding from the b64 portion before re-adding
+        the exact amount needed.  Prevents the bug where appending '==' to a
+        string that already ends in '=' creates 3 '=' (invalid).
+        """
+        if not s:
+            return s
+        prefix   = s[0]
+        b64_data = s[1:].rstrip("=")   # strip existing padding
+        rem      = len(b64_data) % 4
+        if rem == 0:
+            return prefix + b64_data           # no padding needed
+        if rem == 1:
+            return s                           # can't fix: data is truncated
+        return prefix + b64_data + "=" * (4 - rem)
 
     def _is_valid(s: str) -> bool:
         if not s:
             return False
-        b64 = s[1:]
+        norm = _normalize_b64(s)
+        b64  = norm[1:]
+        # After normalization the data portion must be 0 mod 4
+        if len(b64.rstrip("=")) % 4 == 1:
+            return False
         if len(b64) % 4 != 0:
             return False
         try:
@@ -149,16 +177,16 @@ def _read_best_session() -> str:
             return False
 
     def _fix_padding(s: str) -> str:
-        b64 = s[1:]
-        rem = len(b64) % 4
-        return (s + "=" * (4 - rem)) if rem else s
+        return _normalize_b64(s)
 
     def _try_load(s: str, label: str) -> str | None:
         s = _clean(s)
+        # Try 1: as-is
         if _is_valid(s):
             return s
+        # Try 2: normalized padding
         fixed = _fix_padding(s)
-        if _is_valid(fixed):
+        if fixed != s and _is_valid(fixed):
             log.info("Telethon: padding corregido en %s (largo %d→%d).", label, len(s), len(fixed))
             return fixed
         return None
@@ -169,8 +197,23 @@ def _read_best_session() -> str:
         result = _try_load(env_str, "TELEGRAM_SESSION (prod)")
         if result:
             return result
-        log.error("Telethon: TELEGRAM_SESSION de producción inválida.")
-        return _clean(env_str)
+        cleaned = _clean(env_str)
+        b64_data = cleaned[1:].rstrip("=") if cleaned else ""
+        rem = len(b64_data) % 4
+        if rem == 1:
+            log.error(
+                "Telethon: TELEGRAM_SESSION corrupta (largo=%d, datos_b64=%d — 1 mod 4, irrecuperable). "
+                "Solución: corré 'python bot/generate_session.py', actualizá el secret TELEGRAM_SESSION "
+                "con el string completo, y hacé un nuevo deployment.",
+                len(cleaned), len(b64_data),
+            )
+        else:
+            log.error(
+                "Telethon: TELEGRAM_SESSION de producción inválida (largo=%d). "
+                "Actualizá el secret y hacé redeploy.",
+                len(cleaned),
+            )
+        return cleaned
 
     if os.path.exists(_SESSION_FILE):
         file_str = open(_SESSION_FILE, encoding="utf-8").read()
@@ -306,6 +349,11 @@ async def _do_reconnect() -> bool:
             "Telethon: AuthKeyDuplicatedError — producción tiene la sesión activa. "
             "El keepalive reintentará en %ds.", DUP_RETRY_SECS,
         )
+        # Desconectar para que Telethon no reconecte solo (evita spam de logs)
+        try:
+            await _client.disconnect()
+        except Exception:
+            pass
         raise
     except _BAD_AUTH_ERRORS as e:
         log.warning("Telethon: %s — recreando cliente desde sesión guardada...", type(e).__name__)
@@ -325,6 +373,11 @@ async def _do_reconnect() -> bool:
         _prod_has_session = True
         _next_dup_retry   = time.monotonic() + DUP_RETRY_SECS
         log.warning("Telethon: AuthKeyDuplicatedError también con cliente nuevo — producción activa.")
+        # Desconectar para que Telethon no reconecte solo
+        try:
+            await _client.disconnect()
+        except Exception:
+            pass
         raise
     except _BAD_AUTH_ERRORS as e:
         log.error(
