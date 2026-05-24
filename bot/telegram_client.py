@@ -198,6 +198,22 @@ def _read_best_session() -> str:
         result = _try_load(env_str, "TELEGRAM_SESSION (prod)")
         if result:
             return result
+
+        # Env var inválido — intentar con el archivo local como fallback de recuperación.
+        # Esto cubre el caso donde el secret del deployment está desactualizado
+        # pero telegram_session.txt tiene la sesión correcta (p.ej. generada en workspace).
+        if os.path.exists(_SESSION_FILE):
+            file_str = open(_SESSION_FILE, encoding="utf-8").read()
+            result = _try_load(file_str, f"archivo {_SESSION_FILE} (fallback prod)")
+            if result:
+                log.warning(
+                    "Telethon: TELEGRAM_SESSION env var inválido — usando sesión del archivo "
+                    "'%s' como fallback. Actualizá el secret TELEGRAM_SESSION con ese valor "
+                    "y hacé redeploy para evitar este mensaje.",
+                    _SESSION_FILE,
+                )
+                return result
+
         cleaned = _clean(env_str)
         b64_data = cleaned[1:].rstrip("=") if cleaned else ""
         rem = len(b64_data) % 4
