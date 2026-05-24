@@ -41,7 +41,8 @@ BOT_USERNAME   = "@FFPROXYCHEAT_BOT"
 STEP_TIMEOUT   = 20    # segundos por paso de conversación
 PING_INTERVAL  = 60    # ping periódico para detectar auth errors
 CHECK_INTERVAL = 10    # cada 10s el keepalive verifica is_connected()
-DUP_RETRY_SECS = 300   # segundos entre reintentos cuando prod tiene la sesión
+DUP_RETRY_SECS      = 300  # segundos entre reintentos en DEV cuando prod tiene la sesión
+PROD_DUP_RETRY_SECS =  15  # en PROD el overlap de deployments es breve → reintentar rápido
 
 # ─── Thread y loop dedicado para Telethon ────────────────────────────────────
 _tg_loop:   asyncio.AbstractEventLoop | None = None
@@ -344,16 +345,21 @@ async def _do_reconnect() -> bool:
         return ok
     except AuthKeyDuplicatedError:
         _prod_has_session = True
-        _next_dup_retry   = time.monotonic() + DUP_RETRY_SECS
+        _dup_delay        = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
+        _next_dup_retry   = time.monotonic() + _dup_delay
         log.warning(
-            "Telethon: AuthKeyDuplicatedError — producción tiene la sesión activa. "
-            "El keepalive reintentará en %ds.", DUP_RETRY_SECS,
+            "Telethon: AuthKeyDuplicatedError — %s. "
+            "El keepalive reintentará en %ds.",
+            "overlap de deployment — reintento rápido" if IS_PRODUCTION else "producción tiene la sesión activa",
+            _dup_delay,
         )
-        # Desconectar para que Telethon no reconecte solo (evita spam de logs)
-        try:
-            await _client.disconnect()
-        except Exception:
-            pass
+        # En DEV: desconectar para que Telethon no reconecte solo (evita spam de logs).
+        # En PROD: NO desconectar — queremos que reconecte tan pronto caiga el deployment viejo.
+        if not IS_PRODUCTION:
+            try:
+                await _client.disconnect()
+            except Exception:
+                pass
         raise
     except _BAD_AUTH_ERRORS as e:
         log.warning("Telethon: %s — recreando cliente desde sesión guardada...", type(e).__name__)
@@ -371,13 +377,18 @@ async def _do_reconnect() -> bool:
         return ok
     except AuthKeyDuplicatedError:
         _prod_has_session = True
-        _next_dup_retry   = time.monotonic() + DUP_RETRY_SECS
-        log.warning("Telethon: AuthKeyDuplicatedError también con cliente nuevo — producción activa.")
-        # Desconectar para que Telethon no reconecte solo
-        try:
-            await _client.disconnect()
-        except Exception:
-            pass
+        _dup_delay        = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
+        _next_dup_retry   = time.monotonic() + _dup_delay
+        log.warning(
+            "Telethon: AuthKeyDuplicatedError también con cliente nuevo — %s. Reintento en %ds.",
+            "overlap de deployment" if IS_PRODUCTION else "producción activa",
+            _dup_delay,
+        )
+        if not IS_PRODUCTION:
+            try:
+                await _client.disconnect()
+            except Exception:
+                pass
         raise
     except _BAD_AUTH_ERRORS as e:
         log.error(
@@ -424,7 +435,9 @@ async def _keepalive_loop() -> None:
                             "Necesitás regenerar TELEGRAM_SESSION con /tg_relogin."
                         )
                 except AuthKeyDuplicatedError:
-                    log.info("Telethon keepalive: producción sigue activa — reintentando en %ds.", DUP_RETRY_SECS)
+                    _dup_delay      = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
+                    _next_dup_retry = time.monotonic() + _dup_delay
+                    log.info("Telethon keepalive: sigue el overlap/conflicto — reintentando en %ds.", _dup_delay)
                 except _BAD_AUTH_ERRORS as _auth_exc:
                     # Sesión genuinamente inválida o revocada (no duplicada).
                     # Producción TAMBIÉN está sin Telegram → dev debe manejar
@@ -440,12 +453,13 @@ async def _keepalive_loop() -> None:
                 except Exception as _dup_exc:
                     # Error de red u otro transitorio. Mantenemos _prod_has_session=True
                     # pero actualizamos _next_dup_retry para no reintentar cada 10s.
-                    _next_dup_retry = time.monotonic() + DUP_RETRY_SECS
+                    _dup_delay      = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
+                    _next_dup_retry = time.monotonic() + _dup_delay
                     log.warning(
                         "Telethon keepalive: error transitorio en reintento (%s) — "
                         "manteniendo _prod_has_session=True, próximo intento en %ds.",
                         type(_dup_exc).__name__,
-                        DUP_RETRY_SECS,
+                        _dup_delay,
                     )
             continue
 
