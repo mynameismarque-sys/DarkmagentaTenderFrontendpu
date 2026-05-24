@@ -8758,24 +8758,25 @@ async def deshabilitar_chat_cmd(interaction: discord.Interaction):
 
 
 async def _monitor_prod_session_and_close_gateway() -> None:
-    """Dev: cierra el gateway de Discord cuando prod tiene la sesión de Telegram.
+    """Dev: sale del proceso cuando prod toma la sesión de Telegram.
 
-    Esto fuerza que producción reciba el 100% de las interacciones de Discord
-    y pueda usar Telegram normalmente. El loop en main() reconecta cuando prod
-    se detenga y libere la sesión.
+    Usa os._exit(43) (confiable desde cualquier contexto async) en vez de
+    client.close(), que en discord.py no detiene client.run() de forma
+    garantizada desde dentro de un task.
+
+    main() arranca Telethon antes de Discord y hace el chequeo pre-flight,
+    por lo que tras el reinicio start.sh no vuelve a conectar a Discord
+    mientras prod esté activa.
     """
-    # Esperar a que Telethon termine de conectar y determine el estado
-    await asyncio.sleep(15)
+    # Esperar a que Telethon determine el estado (AuthKeyDuplicatedError ~2s)
+    await asyncio.sleep(20)
     while True:
         if telegram_client.prod_has_session():
             log.warning(
-                "Dev: prod tiene la sesión de Telegram — cerrando gateway de Discord "
-                "para que prod reciba el 100%% de las interacciones. "
-                "main() reconectará en %ds cuando prod se detenga.",
-                telegram_client.DUP_RETRY_SECS,
+                "Dev: prod tiene la sesión de Telegram — saliendo (exit 43) "
+                "para que start.sh reinicie sin conectar a Discord mientras prod esté activa."
             )
-            await client.close()
-            return  # main() loop maneja el reconecte
+            os._exit(43)
         await asyncio.sleep(15)
 
 
@@ -9576,8 +9577,31 @@ def main() -> None:
     )
     t.start()
 
+    # ── Pre-flight Telethon ──────────────────────────────────────────────────
+    # Iniciar Telethon ANTES de conectar al gateway de Discord.
+    # Así podemos detectar AuthKeyDuplicatedError (prod activa) y evitar que
+    # dev compita con prod por las interacciones de Discord.
+    if os.environ.get("TELEGRAM_API_ID") and not IS_PRODUCTION:
+        log.info("Dev: iniciando Telethon antes de Discord para detectar sesión de prod...")
+        telegram_client.schedule_connect()
+        time.sleep(10)  # Tiempo suficiente para recibir AuthKeyDuplicatedError (~2s)
+
     log.info("Iniciando bot de Discord...")
     while True:
+        # Chequeo pre-flight: si prod tiene la sesión, no conectar a Discord
+        # hasta que prod se detenga y libere la sesión de Telegram.
+        if not IS_PRODUCTION:
+            while telegram_client.prod_has_session():
+                wait = telegram_client.DUP_RETRY_SECS
+                log.info(
+                    "Dev: prod activa (sesión Telegram) — no conectando a Discord. "
+                    "Re-verificando en %ds...",
+                    wait,
+                )
+                time.sleep(wait)
+            if telegram_client.prod_has_session() is False:
+                log.info("Dev: prod no tiene la sesión — conectando a Discord.")
+
         # Resetear el flag _closed para que client.run() pueda reconectar
         client._closed = False
         try:

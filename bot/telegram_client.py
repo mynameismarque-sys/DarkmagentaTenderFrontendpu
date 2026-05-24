@@ -467,11 +467,17 @@ async def _keepalive_loop() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _connect_async() -> None:
-    """Corre en _tg_loop. Inicia cliente y keepalive."""
+    """Corre en _tg_loop. Inicia cliente y keepalive. Idempotente."""
     global _keepalive_task
 
     if not os.environ.get("TELEGRAM_API_ID"):
         log.warning("TELEGRAM_API_ID no configurado — /gen y /key desactivados.")
+        return
+
+    # Si el keepalive ya corre, evitar doble-init (schedule_connect puede llamarse
+    # desde main() y desde on_ready sin que importe el orden).
+    if _keepalive_task is not None and not _keepalive_task.done():
+        log.info("Telethon: ya iniciado — skip de _connect_async.")
         return
 
     try:
