@@ -7810,14 +7810,27 @@ async def _setup_canal_bypass() -> None:
     except Exception:
         log.exception("Error configurando permisos de #bypass-uid")
 
-    # 6. Postear embed si no existe
+    BYPASS_FILES_URL = "https://1drv.ms/f/c/11cf00aa9d66ffe2/IgDkpuZP4hVlSb9l5iGe_MSjAbcGql7dR1U0cc0Ip2KgvNg?e=5H2WTr"
+    _BYPASS_PANEL_VER = "panel_v2"
+
+    # 6. Postear embed — repostear si no existe o si es versión vieja
     embed_encontrado = False
     async for msg in channel.history(limit=30):
         if msg.author == client.user and msg.embeds:
             for e in msg.embeds:
-                if e.title and "Bypass-UID" in e.title and "panel" in (e.footer.text or "").lower():
+                if e.title and "Bypass-UID" in e.title and _BYPASS_PANEL_VER in (e.footer.text or ""):
                     embed_encontrado = True
                     break
+            if not embed_encontrado:
+                # Embed viejo (sin versión o sin link de archivos) → borrar y repostear
+                for e in msg.embeds:
+                    if e.title and "Bypass-UID" in e.title and "panel" in (e.footer.text or "").lower():
+                        try:
+                            await msg.delete()
+                            log.info("Embed bypass viejo borrado para repostear con link de archivos.")
+                        except Exception:
+                            pass
+                        break
         if embed_encontrado:
             break
 
@@ -7835,18 +7848,23 @@ async def _setup_canal_bypass() -> None:
                 "🖥️ **7 Días** — $7.000 ARS\n"
                 "🖥️ **30 Días** — $14.000 ARS\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**📁 Archivos necesarios:**\n"
+                f"[📥 Descargar archivos del Bypass-UID]({BYPASS_FILES_URL})\n"
+                "_(Descargalos antes de activar el bypass)_\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "**¿Cómo funciona?**\n"
-                "1️⃣ Presioná **🛒 Comprar** y elegí el plan.\n"
-                "2️⃣ Ingresá tu **ID de Free Fire** (UID).\n"
-                "3️⃣ Pagá con Mercado Pago, Transferencia o Binance.\n"
-                "4️⃣ Recibís el archivo de Bypass-UID por mensaje privado. 📩\n\n"
+                "1️⃣ Descargá los archivos con el link de arriba.\n"
+                "2️⃣ Presioná **🛒 Comprar** y elegí el plan.\n"
+                "3️⃣ Ingresá tu **ID de Free Fire** (UID).\n"
+                "4️⃣ Pagá con Mercado Pago, Transferencia o Binance.\n"
+                "5️⃣ Recibís las instrucciones de activación por mensaje privado. 📩\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🆓 Primera vez podés probar **1 día gratis** con el botón de abajo."
                 "\n━━━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=0x1ABC9C,
         )
-        embed.set_footer(text="Marke Panel • Bypass-UID PC [panel]")
+        embed.set_footer(text=f"Marke Panel • Bypass-UID PC [{_BYPASS_PANEL_VER}]")
         await channel.send(embed=embed, view=BypassInfoView())
         log.info("Embed de Bypass-UID posteado en #%s", channel.name)
 
