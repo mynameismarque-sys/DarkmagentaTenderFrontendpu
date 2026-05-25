@@ -2716,12 +2716,17 @@ async def _acreditar_pago_aprobado(
 
     # ── Créditos / entrega según categoría del pack ─────────────────────────
     proxy_key: str | None = None
+    _key_registrada = False
     if pack.categoria == "sensi":
         nuevo_total = database.add_sensi_credits(discord_id, pack.creditos)
         tipo_credito = "de sensi"
     elif pack.categoria in ("android", "ios"):
         nuevo_total = 0
         tipo_credito = pack.categoria
+    elif pack.categoria == "bypass":
+        # Bypass-UID → entrega manual, solo registrar el pago
+        nuevo_total = 0
+        tipo_credito = "bypass"
     else:
         # Proxy → generar key y enviar por DM (sin créditos)
         nuevo_total = 0
@@ -2807,6 +2812,39 @@ async def _acreditar_pago_aprobado(
                 f"Tu archivo iOS **{pack.nombre}** está listo. Enviando enlace ahora... 👇"
             )
             await _enviar_entrega_ios(user, pack)
+        elif pack.categoria == "bypass":
+            # Bypass-UID → notificar al usuario + avisar al admin
+            ff_id_bp  = op.get("ff_id") or database.get_bypass_order_ff_id(discord_id, pack.id)
+            dias_bp   = int(pack.creditos)
+            embed_bp  = discord.Embed(
+                title="✅ ¡Pago aprobado! — Bypass-UID",
+                description=(
+                    f"Tu operación `#{op_id}` fue confirmada.\n\n"
+                    f"🎮 **ID de Free Fire:** `{ff_id_bp or 'N/D'}`\n"
+                    f"⏱ **Duración:** {dias_bp} día{'s' if dias_bp != 1 else ''}\n\n"
+                    "Tu archivo de Bypass-UID está siendo preparado para tu UID. "
+                    "Te lo enviamos por este chat en breve. 📩\n\n"
+                    "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
+                ),
+                color=0x1ABC9C,
+            )
+            embed_bp.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
+            await user.send(embed=embed_bp)
+            # Avisar al admin
+            try:
+                canal_ventas = await _obtener_canal_ventas()
+                if canal_ventas:
+                    metodo_bp = "Naranja X" if op_id.startswith(("NX-", "BPN-")) else "Binance"
+                    await canal_ventas.send(
+                        f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA**\n"
+                        f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                        f"Pack: **{pack.nombre}** ({dias_bp}d) — ${pack.precio:,.0f} ARS\n"
+                        f"🎮 **FF ID (UID):** `{ff_id_bp or 'NO ENCONTRADO'}`\n"
+                        f"Pago: **{metodo_bp}** ✅\n"
+                        f"Enviar el archivo de Bypass-UID configurado para ese UID por DM al usuario."
+                    )
+            except Exception:
+                log.exception("No pude notificar bypass en ventas para op=%s", op_id)
         else:
             # Proxy → enviar key por DM
             dias_proxy = int(pack.creditos)
@@ -6045,6 +6083,7 @@ async def enviar_key_cmd(
 
 CANAL_SENSI_ID: int | None = None   # se rellena en on_ready al crear/encontrar el canal
 CANAL_PROXY_ID   = 1486438612990951646
+CANAL_BYPASS_ID: int = 0   # Se carga de DB config al iniciar (bypass_canal_id)
 
 # Nombres exactos de las categorías gestionadas por el bot
 _CAT_STORE       = "🛒 STORE"
@@ -6087,7 +6126,7 @@ async def _reorganizar_categorias() -> None:
     # ── Fragmentos de nombre por categoría ────────────────────────────────
     nombres_store = [
         "proxy-marke", "android-regedit", "ios-archivos",
-        "flourite", "diamantes-ff", "sensis-xitadas",
+        "flourite", "diamantes-ff", "sensis-xitadas", "bypass-uid",
     ]
     nombres_comunidad  = ["chat"]
     nombres_informacion = ["info-referido", "referido", "postulacion", "postulaciones"]
@@ -7125,6 +7164,389 @@ class ProxyInfoViewSinFree(_SafeViewMixin, discord.ui.View):
         await interaction.followup.send(embed=embed, view=PackView(modo="proxy"), ephemeral=True)
 
 
+# ---------------------------------------------------------------------------
+# BYPASS-UID — clases de UI (pack selector, modal FF ID, métodos de pago, view)
+# ---------------------------------------------------------------------------
+
+class BypassPackSelect(discord.ui.Select):
+    """Selector de plan para Bypass-UID. Abre un modal para pedir el FF ID al seleccionar."""
+
+    def __init__(self):
+        options = []
+        for p in payments.PACKS.values():
+            if p.categoria != "bypass":
+                continue
+            dias = int(p.creditos)
+            label = f"🖥️ {p.nombre} — ${p.precio:,.0f} ARS"
+            desc  = f"Bypass-UID {dias} día{'s' if dias != 1 else ''} — sin ban"
+            options.append(discord.SelectOption(label=label, description=desc, value=p.id))
+        super().__init__(
+            custom_id="bypass_pack_select",
+            placeholder="Elegí la duración del Bypass-UID...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        pack_id = self.values[0]
+        await interaction.response.send_modal(BypassFFIDModal(pack_id=pack_id))
+
+
+class BypassPackView(_SafeViewMixin, discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(BypassPackSelect())
+
+
+class BypassFFIDModal(discord.ui.Modal):
+    """Modal que solicita el ID de Free Fire para completar la compra de Bypass-UID."""
+
+    ff_id: discord.ui.TextInput = discord.ui.TextInput(
+        label="Tu ID de Free Fire (UID)",
+        placeholder="Ej: 1234567890",
+        min_length=5,
+        max_length=20,
+        required=True,
+    )
+
+    def __init__(self, pack_id: str):
+        pack = payments.PACKS[pack_id]
+        super().__init__(title=f"🖥️ Bypass-UID — {pack.nombre}")
+        self.pack_id = pack_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        ff_id = self.ff_id.value.strip()
+        pack  = payments.PACKS[self.pack_id]
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+
+        discord_id = str(interaction.user.id)
+
+        # Guardar orden bypass (ff_id vinculado a esta compra)
+        try:
+            await asyncio.to_thread(database.save_bypass_order, discord_id, self.pack_id, ff_id)
+        except Exception:
+            log.exception("No pude guardar bypass_order para %s pack=%s", discord_id, self.pack_id)
+
+        # Intentar crear preferencia MP (puede fallar sin interrumpir el flujo)
+        mp_url: str | None = None
+        try:
+            pref   = await asyncio.to_thread(payments.crear_preferencia, self.pack_id, discord_id)
+            mp_url = pref.get("init_point")
+        except Exception:
+            log.exception("Error creando preferencia MP bypass pack=%s user=%s", self.pack_id, discord_id)
+
+        dias = int(pack.creditos)
+        partes = [
+            f"**ID de Free Fire:** `{ff_id}`",
+            f"Precio: **${pack.precio:,.0f} ARS**",
+            f"⏱ Duración: **{dias} día{'s' if dias != 1 else ''}**",
+            "",
+            "**Mercado Pago** → link de pago automático (acreditación instantánea).",
+            "",
+            "**Transferencia 🇦🇷** → transferencia al alias, mandás el comprobante por DM.",
+            "",
+            "**Binance** → pagás en USDT y mandás el comprobante para aprobación.",
+            "",
+            "⚠️ Una vez confirmado el pago te enviamos el archivo de Bypass-UID por privado.",
+        ]
+        embed = discord.Embed(
+            title=f"🖥️ Bypass-UID — {pack.nombre}",
+            description="\n".join(partes),
+            color=0x1ABC9C,
+        )
+        view = BypassMetodoPagoView(
+            mp_url=mp_url,
+            pack=pack,
+            discord_id=discord_id,
+            user_id=interaction.user.id,
+            username=interaction.user.display_name,
+            channel_id=interaction.channel_id,
+            ff_id=ff_id,
+        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class BypassTrialFFIDModal(discord.ui.Modal):
+    """Modal que solicita el FF ID para la prueba gratuita de Bypass-UID."""
+
+    ff_id: discord.ui.TextInput = discord.ui.TextInput(
+        label="Tu ID de Free Fire (UID)",
+        placeholder="Ej: 1234567890",
+        min_length=5,
+        max_length=20,
+        required=True,
+    )
+
+    def __init__(self):
+        super().__init__(title="🆓 Prueba Gratuita — Bypass-UID")
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        ff_id     = self.ff_id.value.strip()
+        discord_id = str(interaction.user.id)
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+
+        if database.has_used_bypass_trial(discord_id):
+            await interaction.followup.send(
+                "Ya usaste tu prueba gratuita de Bypass-UID. Para seguir usándolo, comprá un plan. 🖥️",
+                ephemeral=True,
+            )
+            return
+
+        database.mark_bypass_trial_used(discord_id)
+        try:
+            await asyncio.to_thread(database.save_bypass_order, discord_id, "bypass_trial", ff_id)
+        except Exception:
+            log.exception("No pude guardar bypass_order trial para %s", discord_id)
+
+        # Notificar al admin en #ventas
+        try:
+            canal_ventas = await _obtener_canal_ventas()
+            if canal_ventas:
+                await canal_ventas.send(
+                    f"🆓 **BYPASS-UID PRUEBA GRATUITA**\n"
+                    f"Usuario: {interaction.user.mention} (`{interaction.user}` / `{discord_id}`)\n"
+                    f"🎮 **FF ID:** `{ff_id}`\n"
+                    f"Enviar el archivo de Bypass-UID de 1 día por DM al usuario."
+                )
+        except Exception:
+            log.exception("No pude notificar en ventas prueba bypass para %s", discord_id)
+
+        embed_ok = discord.Embed(
+            title="✅ ¡Prueba de Bypass-UID activada!",
+            description=(
+                f"🎮 **ID de Free Fire:** `{ff_id}`\n\n"
+                "Tu prueba gratuita de **1 día** está siendo preparada.\n"
+                "Un administrador te enviará el archivo de Bypass-UID por mensaje privado a la brevedad.\n\n"
+                "⚠️ Esta prueba es de uso único por cuenta."
+            ),
+            color=0x2ECC71,
+        )
+        embed_ok.set_footer(text="Marke Panel • Bypass-UID PC")
+        try:
+            await interaction.user.send(embed=embed_ok)
+            await interaction.followup.send(
+                "✅ ¡Listo! Te mandé los detalles por mensaje privado. 🖥️",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(embed=embed_ok, ephemeral=True)
+
+
+class BypassNXIniciarPago(discord.ui.Button):
+    """Botón Transferencia Bancaria para Bypass-UID (guarda ff_id en extra_data)."""
+
+    def __init__(self, pack, discord_id: str, user_id: int, username: str, channel_id: int, ff_id: str):
+        super().__init__(
+            label="Transferencia",
+            style=discord.ButtonStyle.success,
+            emoji="🇦🇷",
+            row=0,
+        )
+        self.pack       = pack
+        self.discord_id = discord_id
+        self.user_id    = user_id
+        self.username   = username
+        self.channel_id = channel_id
+        self.ff_id      = ff_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await _safe_defer(interaction, ephemeral=True, thinking=False)
+
+        op_id = f"BPN-{random.randint(1000, 9999)}"
+        extra = f'{{"ff_id":"{self.ff_id}"}}'
+        with _pending_binance_lock:
+            _pending_binance[op_id] = {
+                "discord_id": self.discord_id,
+                "user_id":    self.user_id,
+                "pack":       self.pack,
+                "channel_id": self.channel_id,
+                "username":   self.username,
+                "metodo":     "NaranjaX",
+                "ff_id":      self.ff_id,
+            }
+        try:
+            await asyncio.to_thread(
+                database.save_pending_payment,
+                payment_id=op_id, discord_id=self.discord_id, user_id=self.user_id,
+                pack_id=self.pack.id, channel_id=self.channel_id,
+                username=self.username, metodo="NaranjaX", extra_data=extra,
+            )
+        except Exception:
+            log.exception("No pude persistir pending bypass NX %s", op_id)
+
+        embed = discord.Embed(
+            title="🟠 Pago vía Transferencia — Bypass-UID",
+            description=(
+                f"**Operación:** `#{op_id}`\n"
+                f"**ID Free Fire:** `{self.ff_id}`\n\n"
+                f"Realizá una transferencia por **${self.pack.precio:,.0f} ARS** con los siguientes datos:\n\n"
+                f"🏦 **Plataforma:** Naranja X\n"
+                f"👤 **Alias:** `{NARANJA_X_ALIAS}`\n"
+                f"🔢 **CBU:** `{NARANJA_X_CBU}`\n"
+                f"🪪 **Titular:** Agustín Nahuel Marquesini\n\n"
+                "Una vez transferido, presioná **Subir Comprobante** y mandame la captura."
+            ),
+            color=0xFF5A00,
+        )
+        if NARANJA_X_LOGO_URL:
+            embed.set_thumbnail(url=NARANJA_X_LOGO_URL)
+        embed.set_footer(text="Marke Panel • Bypass-UID — se acredita al confirmar")
+        view = BinanceComprobanteView(op_id=op_id, user_id=self.user_id)
+        try:
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception as e:
+            log.warning("BypassNX followup.send falló: %s", e)
+
+
+class BypassBNIniciarPago(discord.ui.Button):
+    """Botón Binance para Bypass-UID (guarda ff_id en extra_data)."""
+
+    def __init__(self, pack, discord_id: str, user_id: int, username: str, channel_id: int, ff_id: str):
+        super().__init__(
+            label="Binance",
+            style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji(name="binance", id=1499205940220526642),
+            row=0,
+        )
+        self.pack       = pack
+        self.discord_id = discord_id
+        self.user_id    = user_id
+        self.username   = username
+        self.channel_id = channel_id
+        self.ff_id      = ff_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await _safe_defer(interaction, ephemeral=True, thinking=False)
+
+        op_id = f"BPB-{random.randint(1000, 9999)}"
+        extra = f'{{"ff_id":"{self.ff_id}"}}'
+        with _pending_binance_lock:
+            _pending_binance[op_id] = {
+                "discord_id": self.discord_id,
+                "user_id":    self.user_id,
+                "pack":       self.pack,
+                "channel_id": self.channel_id,
+                "username":   self.username,
+                "metodo":     "Binance",
+                "ff_id":      self.ff_id,
+            }
+        try:
+            await asyncio.to_thread(
+                database.save_pending_payment,
+                payment_id=op_id, discord_id=self.discord_id, user_id=self.user_id,
+                pack_id=self.pack.id, channel_id=self.channel_id,
+                username=self.username, metodo="Binance", extra_data=extra,
+            )
+        except Exception:
+            log.exception("No pude persistir pending bypass BN %s", op_id)
+
+        embed = discord.Embed(
+            title="💰 Pago con Binance Pay — Bypass-UID",
+            description=(
+                f"**Operación:** `#{op_id}`\n"
+                f"**ID Free Fire:** `{self.ff_id}`\n\n"
+                f"Transferí el equivalente a **${self.pack.precio:,.0f} ARS** "
+                f"en USDT a este Binance ID:\n\n"
+                f"```\n{BINANCE_ID}\n```\n"
+                "Una vez que pagaste, presioná **Subir Comprobante** y enviá la captura."
+            ),
+            color=0xF0B90B,
+        )
+        embed.set_footer(text="Marke Panel • Bypass-UID — aprobación manual")
+        view = BinanceComprobanteView(op_id=op_id, user_id=self.user_id)
+        try:
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception as e:
+            log.warning("BypassBN followup.send falló: %s", e)
+
+
+class BypassMetodoPagoView(_SafeViewMixin, discord.ui.View):
+    """Vista de métodos de pago para Bypass-UID (incluye ff_id en todos los flujos)."""
+
+    def __init__(
+        self,
+        mp_url: str | None,
+        pack: payments.Pack,
+        discord_id: str,
+        user_id: int,
+        username: str,
+        channel_id: int,
+        ff_id: str,
+    ):
+        super().__init__(timeout=None)
+        if MODO_AUTO_MP:
+            if mp_url:
+                self.add_item(
+                    discord.ui.Button(
+                        label="Mercado Pago",
+                        style=discord.ButtonStyle.link,
+                        url=mp_url,
+                        emoji=discord.PartialEmoji(name="mercadopago", id=1499197027903344811),
+                        row=0,
+                    )
+                )
+            else:
+                self.add_item(
+                    MPGenerarPagoButton(pack=pack, discord_id=discord_id, user_id=user_id, row=0)
+                )
+        self.add_item(
+            BypassNXIniciarPago(
+                pack=pack, discord_id=discord_id, user_id=user_id,
+                username=username, channel_id=channel_id, ff_id=ff_id,
+            )
+        )
+        self.add_item(
+            BypassBNIniciarPago(
+                pack=pack, discord_id=discord_id, user_id=user_id,
+                username=username, channel_id=channel_id, ff_id=ff_id,
+            )
+        )
+
+
+class BypassInfoView(_SafeViewMixin, discord.ui.View):
+    """View persistente del canal bypass-uid: botones Comprar y FREE."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🛒 Comprar",
+        style=discord.ButtonStyle.blurple,
+        custom_id="bypass_info_comprar",
+    )
+    async def btn_comprar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+        embed = discord.Embed(
+            title="🖥️ Bypass-UID — Elegí tu plan",
+            description=(
+                "Elegí la duración del Bypass-UID que querés comprar.\n"
+                "Funciona en PC para **Free Fire TELA + NORMAL** — te permite jugar "
+                "BR/Clash Squad como si fueras mobile. **Sin riesgo de ban.** 🛡️\n\n"
+                "Al seleccionar el plan se te pedirá tu **ID de Free Fire** para configurar el bypass."
+            ),
+            color=0x1ABC9C,
+        )
+        await interaction.followup.send(embed=embed, view=BypassPackView(), ephemeral=True)
+
+    @discord.ui.button(
+        label="🆓 Prueba GRATIS",
+        style=discord.ButtonStyle.green,
+        custom_id="bypass_info_free",
+    )
+    async def btn_free(self, interaction: discord.Interaction, button: discord.ui.Button):
+        discord_id = str(interaction.user.id)
+
+        if not _puede_registrar(interaction) and database.has_used_bypass_trial(discord_id):
+            await interaction.response.send_message(
+                "Ya usaste tu prueba gratuita de Bypass-UID. Para seguir usándolo, comprá un plan. 🖥️",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(BypassTrialFFIDModal())
+
+
 async def _deshabilitar_gratis_en_1h():
     """Espera 1 hora y luego: expira la promo, quita botón FREE del embed y borra /gratismarke."""
     await client.wait_until_ready()
@@ -7299,6 +7721,153 @@ async def _purgar_canal_proxy() -> None:
         log.info("Purga de #proxy-marke: %d mensaje(s) eliminado(s).", borrados)
     else:
         log.info("Purga de #proxy-marke: canal ya estaba limpio.")
+
+
+# ---------------------------------------------------------------------------
+# Canal Bypass-UID — setup automático
+# ---------------------------------------------------------------------------
+async def _setup_canal_bypass() -> None:
+    """
+    Encuentra o crea el canal #bypass-uid en la categoría 🛒 STORE,
+    configura permisos, postea el embed y purga mensajes no-embed.
+    Guarda el ID en DB config (bypass_canal_id) y actualiza CANAL_BYPASS_ID global.
+    """
+    global CANAL_BYPASS_ID
+    await client.wait_until_ready()
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    # 1. Intentar encontrar canal ya conocido por ID guardado en DB
+    canal_id_str = database.get_config("bypass_canal_id")
+    channel: discord.TextChannel | None = None
+    if canal_id_str:
+        ch = client.get_channel(int(canal_id_str))
+        if isinstance(ch, discord.TextChannel):
+            channel = ch
+
+    # 2. Si no, buscar por nombre
+    if channel is None:
+        for ch in guild.text_channels:
+            plain = ch.name.lower().replace("🖥", "").replace("・", "").strip()
+            if "bypass-uid" in plain or "bypass" in plain:
+                channel = ch
+                break
+
+    # 3. Si no existe, crear en categoría STORE
+    if channel is None:
+        cat_store = await _obtener_o_crear_categoria(guild, _CAT_STORE)
+        try:
+            channel = await guild.create_text_channel(
+                "🖥・bypass-uid",
+                category=cat_store,
+                reason="Canal Bypass-UID creado automáticamente — Marke Panel",
+            )
+            log.info("Canal #bypass-uid creado (id=%s)", channel.id)
+        except Exception:
+            log.exception("No pude crear el canal #bypass-uid")
+            return
+
+    # 4. Guardar ID en DB y global
+    database.set_config("bypass_canal_id", str(channel.id))
+    CANAL_BYPASS_ID = channel.id
+
+    # 5. Configurar permisos
+    rol_verificado = guild.get_role(ROL_VERIFICADO_ID)
+    bot_member     = guild.get_member(client.user.id)
+    try:
+        await channel.set_permissions(guild.default_role, view_channel=False, send_messages=False)
+        if rol_verificado:
+            await channel.set_permissions(
+                rol_verificado,
+                view_channel=True,
+                send_messages=True,
+                use_application_commands=True,
+                read_message_history=True,
+                create_public_threads=False,
+                create_private_threads=False,
+                send_messages_in_threads=False,
+                attach_files=False,
+                embed_links=False,
+                add_reactions=False,
+            )
+        if bot_member:
+            await channel.set_permissions(
+                bot_member,
+                view_channel=True, send_messages=True, manage_messages=True,
+                read_message_history=True, use_application_commands=True,
+                create_public_threads=True, send_messages_in_threads=True,
+                attach_files=True, embed_links=True,
+            )
+        if "🖥" not in channel.name:
+            try:
+                await channel.edit(name="🖥・bypass-uid")
+            except Exception:
+                pass
+        log.info("Permisos de #bypass-uid configurados (id=%s)", channel.id)
+    except discord.Forbidden:
+        log.warning("Sin permisos para modificar #bypass-uid")
+    except Exception:
+        log.exception("Error configurando permisos de #bypass-uid")
+
+    # 6. Postear embed si no existe
+    embed_encontrado = False
+    async for msg in channel.history(limit=30):
+        if msg.author == client.user and msg.embeds:
+            for e in msg.embeds:
+                if e.title and "Bypass-UID" in e.title and "panel" in (e.footer.text or "").lower():
+                    embed_encontrado = True
+                    break
+        if embed_encontrado:
+            break
+
+    if not embed_encontrado:
+        embed = discord.Embed(
+            title="🖥️  Bypass-UID — Marke Panel",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**¿Qué es el Bypass-UID?**\n"
+                "Permite jugar **Free Fire TELA + NORMAL en PC** como si fueras mobile "
+                "(BR, Clash Squad). Compatible con todas las versiones actuales. 🛡️ **Sin riesgo de ban.**\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**💰 Precios:**\n"
+                "🖥️ **1 Día** — $2.500 ARS\n"
+                "🖥️ **7 Días** — $7.000 ARS\n"
+                "🖥️ **30 Días** — $14.000 ARS\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**¿Cómo funciona?**\n"
+                "1️⃣ Presioná **🛒 Comprar** y elegí el plan.\n"
+                "2️⃣ Ingresá tu **ID de Free Fire** (UID).\n"
+                "3️⃣ Pagá con Mercado Pago, Transferencia o Binance.\n"
+                "4️⃣ Recibís el archivo de Bypass-UID por mensaje privado. 📩\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🆓 Primera vez podés probar **1 día gratis** con el botón de abajo."
+                "\n━━━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0x1ABC9C,
+        )
+        embed.set_footer(text="Marke Panel • Bypass-UID PC [panel]")
+        await channel.send(embed=embed, view=BypassInfoView())
+        log.info("Embed de Bypass-UID posteado en #%s", channel.name)
+
+    # 7. Purgar mensajes que no sean el embed del bot
+    await asyncio.sleep(3)
+    try:
+        def _es_embed_bypass(msg: discord.Message) -> bool:
+            if msg.author != client.user:
+                return False
+            for e in msg.embeds:
+                if e.title and "Bypass-UID" in e.title:
+                    return True
+            return False
+
+        deleted = await channel.purge(limit=300, check=lambda m: not _es_embed_bypass(m), bulk=True)
+        if deleted:
+            log.info("Purga #bypass-uid: %d mensaje(s) eliminado(s)", len(deleted))
+    except discord.Forbidden:
+        log.warning("Sin permisos para purgar #bypass-uid")
+    except Exception:
+        log.exception("Error purgando #bypass-uid")
 
 
 async def _configurar_canal_verificacion() -> None:
@@ -8930,6 +9499,8 @@ async def on_ready():
     client.add_view(DiamantesCanalView())
     client.add_view(ProxyInfoView())
     client.add_view(PostulacionView())
+    client.add_view(BypassInfoView())
+    client.add_view(BypassPackView())
     asyncio.create_task(_actualizar_perfil())
     asyncio.create_task(_configurar_canal_verificacion())
     asyncio.create_task(_postear_verificacion())
@@ -8945,6 +9516,7 @@ async def on_ready():
     asyncio.create_task(_setup_canal_sensis())
     asyncio.create_task(_setup_canal_android())
     asyncio.create_task(_setup_canal_ios())
+    asyncio.create_task(_setup_canal_bypass())
     asyncio.create_task(_setup_canal_flourite())
     asyncio.create_task(_setup_canal_diamantes())
     asyncio.create_task(_setup_canal_chat())
@@ -8971,7 +9543,7 @@ async def on_ready():
                 continue
             with _pending_binance_lock:
                 if row["payment_id"] not in _pending_binance:
-                    _pending_binance[row["payment_id"]] = {
+                    restored_entry = {
                         "discord_id": row["discord_id"],
                         "user_id":    row["user_id"],
                         "pack":       pack_obj,
@@ -8979,6 +9551,17 @@ async def on_ready():
                         "username":   row["username"],
                         "metodo":     row["metodo"],
                     }
+                    # Recuperar ff_id desde extra_data para bypass
+                    extra_data_raw = row.get("extra_data")
+                    if extra_data_raw and pack_obj.categoria == "bypass":
+                        try:
+                            import json as _json
+                            extra = _json.loads(extra_data_raw)
+                            if extra.get("ff_id"):
+                                restored_entry["ff_id"] = extra["ff_id"]
+                        except Exception:
+                            pass
+                    _pending_binance[row["payment_id"]] = restored_entry
                     restored += 1
                 # Si el user todavía no tiene una operación asignada en
                 # _waiting_comprobante, le asignamos esta (la más reciente
@@ -9533,6 +10116,42 @@ def _notificar_pago(
                     f"Tu archivo iOS **{pack.nombre}** está listo. Enviando enlace ahora... 👇"
                 )
                 await _enviar_entrega_ios(user, pack)
+
+            elif pack.categoria == "bypass":
+                # Bypass-UID: entrega manual — notificar al admin con el FF ID
+                ff_id_bypass = database.get_bypass_order_ff_id(discord_id, pack.id)
+                dias_bypass  = int(pack.creditos)
+                embed_bypass = discord.Embed(
+                    title="✅ ¡Pago aprobado! — Bypass-UID",
+                    description=(
+                        f"Recibimos tu pago del plan **{pack.nombre}**.\n\n"
+                        f"🎮 **ID de Free Fire:** `{ff_id_bypass or 'N/D'}`\n"
+                        f"⏱ **Duración:** {dias_bypass} día{'s' if dias_bypass != 1 else ''}\n\n"
+                        "Tu archivo de Bypass-UID está siendo preparado para tu UID. "
+                        "Te lo enviamos por este chat en breve. 📩\n\n"
+                        "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
+                    ),
+                    color=0x1ABC9C,
+                )
+                embed_bypass.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
+                try:
+                    await user.send(embed=embed_bypass)
+                except discord.Forbidden:
+                    log.warning("No pude enviar DM bypass a %s — DM bloqueado", discord_id)
+                # Notificar al admin en #ventas con el FF ID para entrega manual
+                try:
+                    canal_ventas = await _obtener_canal_ventas()
+                    if canal_ventas:
+                        await canal_ventas.send(
+                            f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA**\n"
+                            f"Usuario: <@{discord_id}> (`{discord_id}`)\n"
+                            f"Pack: **{pack.nombre}** ({dias_bypass}d) — ${pack.precio:,.0f} ARS\n"
+                            f"🎮 **FF ID (UID):** `{ff_id_bypass or 'NO ENCONTRADO'}`\n"
+                            f"Pago: **Mercado Pago** ✅\n"
+                            f"Enviar el archivo de Bypass-UID configurado para ese UID por DM al usuario."
+                        )
+                except Exception:
+                    log.exception("No pude notificar bypass en ventas para %s", discord_id)
 
             else:
                 # Pack de proxy: generar key y entregar igual que pago manual

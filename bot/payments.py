@@ -39,6 +39,10 @@ PACKS: dict[str, Pack] = {
     "trickios":  Pack(id="trickios",  nombre="TRICK iOS",           precio=5000.0, creditos=0, categoria="ios"),
     "auxmira":   Pack(id="auxmira",   nombre="Auxilio de Mira iOS", precio=6000.0, creditos=0, categoria="ios"),
     "regedit75": Pack(id="regedit75", nombre="Regedit 75% iOS",     precio=5000.0, creditos=0, categoria="ios"),
+    # ── Bypass-UID (PC — TELA + NORMAL) ─────────────────────────────────────
+    "bypass_1d":  Pack(id="bypass_1d",  nombre="1 Día",   precio=2500.0,  creditos=1,  categoria="bypass"),
+    "bypass_7d":  Pack(id="bypass_7d",  nombre="7 Días",  precio=7000.0,  creditos=7,  categoria="bypass"),
+    "bypass_30d": Pack(id="bypass_30d", nombre="30 Días", precio=14000.0, creditos=30, categoria="bypass"),
 }
 
 

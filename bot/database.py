@@ -66,6 +66,14 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS bypass_free_trial_used (
+                discord_id TEXT PRIMARY KEY,
+                used_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS sensi_logs (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 discord_id  TEXT NOT NULL,
@@ -88,10 +96,15 @@ def init_db() -> None:
                 channel_id  INTEGER,
                 username    TEXT NOT NULL,
                 metodo      TEXT NOT NULL,
+                extra_data  TEXT,
                 created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        # Migración: agregar extra_data si la tabla ya existía sin ella
+        pp_cols = [r[1] for r in conn.execute("PRAGMA table_info(pending_payments)").fetchall()]
+        if "extra_data" not in pp_cols:
+            conn.execute("ALTER TABLE pending_payments ADD COLUMN extra_data TEXT")
         # Análisis IA de comprobantes (para auditoría y detección de duplicados)
         conn.execute(
             """
@@ -198,6 +211,22 @@ def init_db() -> None:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+        # Órdenes de Bypass-UID — almacena el FF player ID por compra
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bypass_orders (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_id TEXT NOT NULL,
+                pack_id    TEXT NOT NULL,
+                ff_id      TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_bypass_orders_user "
+            "ON bypass_orders(discord_id, pack_id)"
         )
         conn.commit()
 
@@ -382,6 +411,49 @@ def mark_free_trial_used(discord_id: str) -> None:
         conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Bypass-UID free trial
+# ---------------------------------------------------------------------------
+def has_used_bypass_trial(discord_id: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM bypass_free_trial_used WHERE discord_id = ?", (str(discord_id),)
+        ).fetchone()
+        return row is not None
+
+
+def mark_bypass_trial_used(discord_id: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO bypass_free_trial_used (discord_id) VALUES (?)",
+            (str(discord_id),),
+        )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Bypass-UID orders — almacena el FF player ID asociado a cada compra
+# ---------------------------------------------------------------------------
+def save_bypass_order(discord_id: str, pack_id: str, ff_id: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO bypass_orders (discord_id, pack_id, ff_id) VALUES (?, ?, ?)",
+            (str(discord_id), str(pack_id), str(ff_id).strip()),
+        )
+        conn.commit()
+
+
+def get_bypass_order_ff_id(discord_id: str, pack_id: str) -> str:
+    """Devuelve el FF player ID más reciente para (discord_id, pack_id), o '' si no existe."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT ff_id FROM bypass_orders WHERE discord_id = ? AND pack_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (str(discord_id), str(pack_id)),
+        ).fetchone()
+        return row["ff_id"] if row else ""
+
+
 def payment_exists(payment_id: str) -> bool:
     with _connect() as conn:
         row = conn.execute(
@@ -552,16 +624,17 @@ def save_pending_payment(
     channel_id: int | None,
     username: str,
     metodo: str,
+    extra_data: str | None = None,
 ) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO pending_payments
-            (payment_id, discord_id, user_id, pack_id, channel_id, username, metodo)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (payment_id, discord_id, user_id, pack_id, channel_id, username, metodo, extra_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (str(payment_id), str(discord_id), int(user_id), str(pack_id),
-             int(channel_id) if channel_id else None, str(username), str(metodo)),
+             int(channel_id) if channel_id else None, str(username), str(metodo), extra_data),
         )
         conn.commit()
 
