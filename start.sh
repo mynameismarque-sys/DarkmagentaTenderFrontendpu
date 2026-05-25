@@ -175,21 +175,29 @@ echo "=== Setup completo — libs: $(ls "$PW_LIBS_DIR" 2>/dev/null | tr '\n' ' '
 # Flask tiene retry integrado: si el puerto 5000 sigue ocupado por el health-check
 # cuando Python arranca, reintenta cada 0.5s hasta tomarlo.
 echo "=== Iniciando bot ==="
-_BOT_CRASH=0
 (
+    _CRASHES=0
     while true; do
-        python -u main.py && _exit_code=0 || _exit_code=$?
-        if [ $_exit_code -eq 0 ]; then
-            echo "=== Bot terminó limpiamente ==="
-            break
+        _START_TS=$(date +%s)
+        python -u main.py; _exit_code=$?
+        _UPTIME=$(( $(date +%s) - _START_TS ))
+
+        # Si corrió más de 5 minutos → resetear backoff (fue estable)
+        if [ $_UPTIME -ge 300 ]; then
+            _CRASHES=0
         fi
-        _BOT_CRASH=$((_BOT_CRASH + 1))
-        _wait=$((_BOT_CRASH * 3))
+
+        _CRASHES=$((_CRASHES + 1))
+        # Backoff: 3s, 6s, 9s... máx 15s
+        _wait=$((_CRASHES * 3))
         [ $_wait -gt 15 ] && _wait=15
-        if [ $_exit_code -eq 42 ]; then
-            echo "=== Discord 503 — reintento #${_BOT_CRASH} en ${_wait}s... ==="
+
+        if [ $_exit_code -eq 0 ]; then
+            echo "=== Bot salió limpiamente (uptime ${_UPTIME}s) — reconectando en ${_wait}s... ==="
+        elif [ $_exit_code -eq 42 ]; then
+            echo "=== Discord 503 (uptime ${_UPTIME}s) — reintento #${_CRASHES} en ${_wait}s... ==="
         else
-            echo "=== Bot crasheó (exit ${_exit_code}) — reintento #${_BOT_CRASH} en ${_wait}s... ==="
+            echo "=== Bot crasheó exit=${_exit_code} (uptime ${_UPTIME}s) — reintento #${_CRASHES} en ${_wait}s... ==="
         fi
         sleep $_wait
     done

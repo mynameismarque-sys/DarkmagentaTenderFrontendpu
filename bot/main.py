@@ -9749,8 +9749,15 @@ def main() -> None:
                 time.sleep(3600)
             log.info("Dev: prod ya no tiene la sesión — reconectando al gateway de Discord.")
             # Continúa el while → client.run() de nuevo
+        elif IS_PRODUCTION:
+            # En producción NUNCA salir del loop — reconectar siempre tras una breve pausa.
+            log.warning("Discord: client.run() terminó inesperadamente — reconectando en 5s...")
+            print("[RECONNECT] Discord client.run() terminó — reconectando en 5s...", flush=True)
+            time.sleep(5)
+            # Continúa el while → client.run() de nuevo
         else:
-            break  # Salida normal (prod mode o cierre limpio)
+            # Dev sin Telegram API: salida limpia intencional
+            break
 
 
 if __name__ == "__main__":
