@@ -5634,6 +5634,79 @@ async def diamantes_manual(
 
 
 @tree.command(
+    name="enviado-diamantes",
+    description="(Admin) Confirmar manualmente que los diamantes ya fueron entregados",
+)
+@app_commands.describe(
+    usuario="Usuario que recibió los diamantes",
+    cantidad="Cantidad de diamantes entregados (ej: 110, 341, 572, 1166, 2398, 6160)",
+    id_freefire="ID de Free Fire del comprador (opcional)",
+)
+async def enviado_diamantes_cmd(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    cantidad: int,
+    id_freefire: str = "",
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+
+    log.info(
+        "ENVIADO-DIAMANTES — admin=%s usuario=%s diamonds=%d id_ff=%s",
+        interaction.user, usuario, cantidad, id_freefire or "N/A",
+    )
+
+    # ── DM al comprador ───────────────────────────────────────────────────────
+    dm_ok = False
+    try:
+        embed_dm = discord.Embed(
+            title="✅ ¡Diamantes entregados!",
+            description=(
+                f"🎉 Tus **{cantidad:,} 💎** ya fueron acreditados en tu cuenta de Free Fire.\n\n"
+                + (f"🎮 **ID Free Fire:** `{id_freefire}`\n\n" if id_freefire else "")
+                + "Revisá tu saldo — puede demorar unos minutos en aparecer.\n"
+                "Si no los ves en 10 minutos, avisale a un admin. ✨"
+            ),
+            color=0x2ECC71,
+        )
+        embed_dm.set_footer(text="Marke Panel • @markee.4")
+        await usuario.send(embed=embed_dm)
+        dm_ok = True
+    except discord.Forbidden:
+        log.warning("enviado_diamantes: no pude enviar DM a %s (DMs cerrados)", usuario)
+    except Exception:
+        log.exception("enviado_diamantes: error enviando DM a %s", usuario)
+
+    # ── Log en #ventas ────────────────────────────────────────────────────────
+    try:
+        canal_ventas = await _obtener_canal_ventas()
+        if canal_ventas:
+            embed_log = discord.Embed(
+                title="💎 Diamantes Confirmados — Entrega Manual",
+                description=(
+                    f"👤 **Admin:** {interaction.user.mention}\n"
+                    f"🎯 **Comprador:** {usuario.mention} (`{usuario}`)\n"
+                    f"💎 **Cantidad:** {cantidad:,} Diamantes\n"
+                    + (f"🎮 **ID Free Fire:** `{id_freefire}`\n" if id_freefire else "")
+                    + f"\n{'📨 DM de confirmación enviado al usuario.' if dm_ok else '⚠️ No se pudo enviar DM (DMs cerrados).'}"
+                ),
+                color=0x2ECC71,
+            )
+            await canal_ventas.send(embed=embed_log)
+    except Exception:
+        log.exception("enviado_diamantes: error posteando en #ventas")
+
+    # ── Respuesta al admin ────────────────────────────────────────────────────
+    aviso_dm = "DM de confirmación enviado al usuario. ✅" if dm_ok else "⚠️ No se pudo enviar DM (el usuario tiene los DMs cerrados)."
+    await interaction.followup.send(
+        f"✅ **{cantidad:,} 💎** marcados como entregados para {usuario.mention}.\n{aviso_dm}",
+        ephemeral=True,
+    )
+
+
+@tree.command(
     name="reenviar-diamantes",
     description="(Admin) Canjear diamantes para un usuario; PIN opcional si la búsqueda automática falla",
 )
