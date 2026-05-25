@@ -9661,32 +9661,43 @@ def main() -> None:
 
     log.info("Iniciando bot de Discord...")
     while True:
-        # Chequeo pre-flight: si prod tiene la sesión, no conectar a Discord
-        # hasta que prod se detenga y libere la sesión de Telegram.
+        # Chequeo pre-flight: si prod tiene la sesión, no conectar a Discord.
+        # Si además dev fue bloqueado permanentemente (AuthKeyDuplicated detectado),
+        # nunca intentar conectar Discord en todo el ciclo de vida del proceso.
         if not IS_PRODUCTION:
             while telegram_client.prod_has_session():
-                wait = telegram_client.DUP_RETRY_SECS
-                log.info(
-                    "Dev: prod activa (sesión Telegram) — no conectando a Discord. "
-                    "Re-verificando en %ds...",
-                    wait,
-                )
-                time.sleep(wait)
-            if telegram_client.prod_has_session() is False:
-                log.info("Dev: prod no tiene la sesión — conectando a Discord.")
+                if telegram_client.dev_permanently_blocked():
+                    # Bloqueo permanente: prod tiene la sesión y dev no debe interferir nunca.
+                    # Dormir 1h y volver a verificar (solo por si prod es reiniciado manualmente).
+                    log.info(
+                        "Dev: bloqueado permanentemente — Discord desactivado en este proceso. "
+                        "Flask y webhook siguen activos. Re-verificando en 3600s..."
+                    )
+                    time.sleep(3600)
+                else:
+                    wait = telegram_client.DUP_RETRY_SECS
+                    log.info(
+                        "Dev: prod activa (sesión Telegram) — no conectando a Discord. "
+                        "Re-verificando en %ds...",
+                        wait,
+                    )
+                    time.sleep(wait)
+            # Si salimos del while pero seguimos bloqueados permanentemente, no conectar Discord
+            if telegram_client.dev_permanently_blocked():
+                log.info("Dev: bloqueado permanentemente — no conectando Discord aunque prod se haya detenido.")
+                time.sleep(3600)
+                continue
+            log.info("Dev: prod no tiene la sesión — conectando a Discord.")
 
         # Resetear el flag _closed para que client.run() pueda reconectar
         client._closed = False
         try:
             client.run(DISCORD_TOKEN, log_handler=None)
         except (discord.errors.DiscordServerError, discord.errors.HTTPException) as e:
-            # DiscordServerError = 503 upstream
-            # HTTPException 429  = rate limit por demasiadas reconexiones rápidas
             _is_retryable = isinstance(e, discord.errors.DiscordServerError) or (
                 isinstance(e, discord.errors.HTTPException) and e.status == 429
             )
             if _is_retryable:
-                # Código 42 = señal a start.sh para que reintente con backoff
                 log.warning("Discord temporalmente no disponible: %s — saliendo con código 42 para retry", e)
                 os._exit(42)
             log.exception("Error HTTP fatal en client.run, abortando.")
@@ -9695,23 +9706,16 @@ def main() -> None:
             log.exception("Error fatal en client.run, abortando.")
             raise
 
-        # client.run() terminó — verificar si es porque prod tiene la sesión.
-        # IMPORTANTE: esperar en un loop hasta que prod libere la sesión ANTES
-        # de reconectar al gateway, para que dev nunca reciba interacciones
-        # mientras prod está activa.
-        if not IS_PRODUCTION and telegram_client.prod_has_session():
-            while telegram_client.prod_has_session():
-                wait = telegram_client.DUP_RETRY_SECS
+        # client.run() terminó.
+        # Si prod tiene la sesión (o dev fue bloqueado permanentemente), no reconectar Discord.
+        if not IS_PRODUCTION and (telegram_client.prod_has_session() or telegram_client.dev_permanently_blocked()):
+            while telegram_client.prod_has_session() or telegram_client.dev_permanently_blocked():
                 log.info(
-                    "Dev: prod activa — gateway de Discord cerrado. "
-                    "Re-verificando en %ds...",
-                    wait,
+                    "Dev: prod activa o bloqueado permanentemente — gateway de Discord cerrado. "
+                    "Re-verificando en 3600s..."
                 )
-                time.sleep(wait)
-            log.info(
-                "Dev: prod ya no tiene la sesión de Telegram — "
-                "reconectando al gateway de Discord."
-            )
+                time.sleep(3600)
+            log.info("Dev: prod ya no tiene la sesión — reconectando al gateway de Discord.")
             # Continúa el while → client.run() de nuevo
         else:
             break  # Salida normal (prod mode o cierre limpio)

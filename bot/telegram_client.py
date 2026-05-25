@@ -62,6 +62,9 @@ _ready = threading.Event()
 
 _prod_has_session: bool  = False
 _next_dup_retry:   float = 0.0
+# Una vez detectado AuthKeyDuplicatedError en dev, bloqueamos para siempre:
+# dev nunca más intentará conectar Telethon ni Discord mientras prod esté activo.
+_dev_permanently_blocked: bool = False
 
 _SESSION_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "telegram_session.txt"
@@ -264,15 +267,18 @@ def _save_session(client: TelegramClient) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_proxy() -> tuple | None:
-    ip   = os.environ.get("PROXY_IP",   "").strip()
-    port = os.environ.get("PROXY_PORT", "").strip()
-    user = os.environ.get("PROXY_USER", "").strip()
+    # Defaults hardcodeados para el proxy estable del proyecto.
+    # Solo PROXY_PASS es obligatorio vía secret (el resto tiene default seguro).
+    ip   = os.environ.get("PROXY_IP",   "108.181.215.247").strip()
+    port = os.environ.get("PROXY_PORT", "10065").strip()
+    user = os.environ.get("PROXY_USER", "DGZADAXFF").strip()
     pwd  = os.environ.get("PROXY_PASS", "").strip()
 
-    if not all([ip, port, user, pwd]):
-        missing = [k for k, v in {"PROXY_IP": ip, "PROXY_PORT": port,
-                                   "PROXY_USER": user, "PROXY_PASS": pwd}.items() if not v]
-        log.warning("Telethon: proxy no configurado (faltan secrets: %s) — conexión directa.", missing)
+    if not pwd:
+        log.warning(
+            "Telethon: PROXY_PASS no configurado — conectando SIN proxy. "
+            "La IP de Replit es dinámica y puede invalidar la sesión de Telegram."
+        )
         return None
 
     proxy_type_str = os.environ.get("PROXY_TYPE", "HTTP").strip().upper()
@@ -363,19 +369,23 @@ async def _do_reconnect() -> bool:
         _prod_has_session = True
         _dup_delay        = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
         _next_dup_retry   = time.monotonic() + _dup_delay
-        log.warning(
-            "Telethon: AuthKeyDuplicatedError — %s. "
-            "El keepalive reintentará en %ds.",
-            "overlap de deployment — reintento rápido" if IS_PRODUCTION else "producción tiene la sesión activa",
-            _dup_delay,
-        )
-        # En DEV: desconectar para que Telethon no reconecte solo (evita spam de logs).
-        # En PROD: NO desconectar — queremos que reconecte tan pronto caiga el deployment viejo.
         if not IS_PRODUCTION:
+            global _dev_permanently_blocked
+            _dev_permanently_blocked = True
+            log.warning(
+                "Telethon: AuthKeyDuplicatedError — producción tiene la sesión activa. "
+                "Dev bloqueado PERMANENTEMENTE: Telethon y Discord no reconectarán "
+                "para no interrumpir la sesión de producción."
+            )
             try:
                 await _client.disconnect()
             except Exception:
                 pass
+        else:
+            log.warning(
+                "Telethon: AuthKeyDuplicatedError — overlap de deployment. "
+                "El keepalive reintentará en %ds.", _dup_delay,
+            )
         raise
     except _BAD_AUTH_ERRORS as e:
         log.warning("Telethon: %s — recreando cliente desde sesión guardada...", type(e).__name__)
@@ -395,16 +405,20 @@ async def _do_reconnect() -> bool:
         _prod_has_session = True
         _dup_delay        = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
         _next_dup_retry   = time.monotonic() + _dup_delay
-        log.warning(
-            "Telethon: AuthKeyDuplicatedError también con cliente nuevo — %s. Reintento en %ds.",
-            "overlap de deployment" if IS_PRODUCTION else "producción activa",
-            _dup_delay,
-        )
         if not IS_PRODUCTION:
+            _dev_permanently_blocked = True
+            log.warning(
+                "Telethon: AuthKeyDuplicatedError (cliente nuevo) — dev bloqueado PERMANENTEMENTE."
+            )
             try:
                 await _client.disconnect()
             except Exception:
                 pass
+        else:
+            log.warning(
+                "Telethon: AuthKeyDuplicatedError también con cliente nuevo — overlap de deployment. "
+                "Reintento en %ds.", _dup_delay,
+            )
         raise
     except _BAD_AUTH_ERRORS as e:
         log.error(
@@ -430,6 +444,12 @@ async def _keepalive_loop() -> None:
         now = asyncio.get_event_loop().time()
 
         if _prod_has_session:
+            # En dev: bloqueado permanentemente → nunca reintentar para no
+            # interrumpir la sesión de producción con AuthKeyDuplicatedError.
+            if not IS_PRODUCTION and _dev_permanently_blocked:
+                await asyncio.sleep(3600)
+                continue
+
             if time.monotonic() < _next_dup_retry:
                 continue
             log.info("Telethon keepalive: reintentando conexión (producción quizás se detuvo)...")
@@ -441,9 +461,6 @@ async def _keepalive_loop() -> None:
                         last_ping  = now
                         auth_delay = 60
                     else:
-                        # ok=False → is_user_authorized() devolvió False (sesión inválida/revocada).
-                        # Producción también está sin Telegram → dev toma las interacciones
-                        # para que el usuario reciba un error útil en vez de "no respondió".
                         _prod_has_session = False
                         _next_dup_retry   = 0.0
                         log.error(
@@ -455,10 +472,6 @@ async def _keepalive_loop() -> None:
                     _next_dup_retry = time.monotonic() + _dup_delay
                     log.info("Telethon keepalive: sigue el overlap/conflicto — reintentando en %ds.", _dup_delay)
                 except _BAD_AUTH_ERRORS as _auth_exc:
-                    # Sesión genuinamente inválida o revocada (no duplicada).
-                    # Producción TAMBIÉN está sin Telegram → dev debe manejar
-                    # las interacciones (aunque falle con error de Telegram,
-                    # es mejor que "La aplicación no respondió").
                     _prod_has_session = False
                     _next_dup_retry   = 0.0
                     log.error(
@@ -467,8 +480,6 @@ async def _keepalive_loop() -> None:
                         type(_auth_exc).__name__,
                     )
                 except Exception as _dup_exc:
-                    # Error de red u otro transitorio. Mantenemos _prod_has_session=True
-                    # pero actualizamos _next_dup_retry para no reintentar cada 10s.
                     _dup_delay      = PROD_DUP_RETRY_SECS if IS_PRODUCTION else DUP_RETRY_SECS
                     _next_dup_retry = time.monotonic() + _dup_delay
                     log.warning(
@@ -637,6 +648,13 @@ def prod_has_session() -> bool:
     Thread-safe.
     """
     return _prod_has_session
+
+
+def dev_permanently_blocked() -> bool:
+    """True si dev detectó AuthKeyDuplicatedError y fue bloqueado permanentemente.
+    Cuando es True, dev nunca intentará reconectar Telethon ni Discord.
+    """
+    return _dev_permanently_blocked
 
 
 # ─────────────────────────────────────────────────────────────────────────────
