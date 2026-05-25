@@ -9,7 +9,7 @@ SYS_RPATH="/usr/lib/x86_64-linux-gnu:/usr/lib:/lib/x86_64-linux-gnu:/lib:${PW_LI
 rm -rf "$PW_LIBS_DIR" && mkdir -p "$PW_LIBS_DIR"
 
 # ── Health-check server en puerto 8081 (INMEDIATO) ────────────────────────────
-echo "=== Levantando health-check en :8081 ==="
+echo "=== Levantando health-check en :5000 y :8081 ==="
 python3 - <<'PYEOF' &
 import http.server, threading, time, sys
 class _H(http.server.BaseHTTPRequestHandler):
@@ -18,12 +18,16 @@ class _H(http.server.BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200); self.end_headers()
     def log_message(self, *a): pass
-try:
-    httpd = http.server.HTTPServer(("0.0.0.0", 8081), _H)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+started = []
+for _port in (5000, 8081):
+    try:
+        _srv = http.server.HTTPServer(("0.0.0.0", _port), _H)
+        threading.Thread(target=_srv.serve_forever, daemon=True).start()
+        started.append(_port)
+    except Exception as e:
+        print(f"health-check :{_port} error: {e}", file=sys.stderr)
+if started:
     time.sleep(600)
-except Exception as e:
-    print(f"health-check error: {e}", file=sys.stderr)
 PYEOF
 HEALTH_PID=$!
 echo "=== Health-check PID: $HEALTH_PID ==="
@@ -145,14 +149,22 @@ if [ -z "${PATCHELF_BIN:-}" ]; then
 fi
 
 if [ -n "${PATCHELF_BIN:-}" ] && [ -n "$CHROME_BINS" ]; then
-    echo "=== patchelf: $PATCHELF_BIN ==="
+    echo "=== patchelf: $PATCHELF_BIN (paralelo) ==="
+    _patchelf_pids=()
+    _patchelf_bins=()
     while IFS= read -r _bin; do
         [ -z "$_bin" ] && continue
-        echo "=== patchelf --force-rpath → $(basename "$_bin") ==="
-        "$PATCHELF_BIN" --force-rpath --set-rpath "$SYS_RPATH" "$_bin" 2>/dev/null \
-            && echo "=== RPATH: $("$PATCHELF_BIN" --print-rpath "$_bin" 2>/dev/null || echo "?") ===" \
-            || echo "=== WARN: patchelf falló en $(basename "$_bin") ==="
+        echo "=== patchelf --force-rpath → $(basename "$_bin") (background) ==="
+        "$PATCHELF_BIN" --force-rpath --set-rpath "$SYS_RPATH" "$_bin" 2>/dev/null &
+        _patchelf_pids+=($!)
+        _patchelf_bins+=("$_bin")
     done <<< "$CHROME_BINS"
+    # Esperar a que todos los patchelf terminen
+    for _i in "${!_patchelf_pids[@]}"; do
+        wait "${_patchelf_pids[$_i]}" 2>/dev/null || true
+        _rpath=$("$PATCHELF_BIN" --print-rpath "${_patchelf_bins[$_i]}" 2>/dev/null || echo "?")
+        echo "=== RPATH $(basename "${_patchelf_bins[$_i]}"): $_rpath ==="
+    done
 else
     echo "=== WARN: patchelf no disponible o sin binarios ==="
 fi
