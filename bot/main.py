@@ -1073,6 +1073,34 @@ async def mercadostatus(interaction: discord.Interaction):
 # ---------------------------------------------------------------------------
 # /gen y /key — integración con @FFPROXYCHEAT_BOT via Telethon
 # ---------------------------------------------------------------------------
+@tree.command(name="resync", description="(Admin) Forzar re-sincronización de slash commands con Discord")
+async def resync_cmd(interaction: discord.Interaction):
+    if not _puede_registrar(interaction):
+        await interaction.response.send_message("No tenés permiso.", ephemeral=True)
+        return
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    guild_obj = _resolver_guild()
+    try:
+        if guild_obj:
+            tree.copy_global_to(guild=guild_obj)
+            synced = await tree.sync(guild=guild_obj)
+            msg = f"[SYNC OK] {len(synced)} comandos sincronizados con el servidor."
+            log.info(msg); print(msg, flush=True)
+            await interaction.followup.send(f"✅ {len(synced)} comandos re-sincronizados con el servidor.", ephemeral=True)
+        else:
+            synced = await tree.sync()
+            msg = f"[SYNC OK] {len(synced)} comandos sync global (puede tardar hasta 1h)."
+            log.info(msg); print(msg, flush=True)
+            await interaction.followup.send(f"✅ {len(synced)} comandos sync global (hasta 1h para aparecer).", ephemeral=True)
+    except discord.HTTPException as e:
+        if e.status == 429:
+            await interaction.followup.send(f"⚠️ Rate limit de Discord. Intentá de nuevo en {e.retry_after:.0f}s.", ephemeral=True)
+        else:
+            await interaction.followup.send(f"❌ Error HTTP: {e}", ephemeral=True)
+    except Exception as exc:
+        await interaction.followup.send(f"❌ Error: {exc}", ephemeral=True)
+
+
 @tree.command(name="gen", description="(Admin) Generar una key en el bot de FF Proxy")
 @app_commands.describe(key="La key a generar", dias="Cantidad de días de acceso")
 async def gen_cmd(interaction: discord.Interaction, key: str, dias: int):
@@ -9051,7 +9079,9 @@ async def on_ready():
         try:
             tree.copy_global_to(guild=g)
             synced = await tree.sync(guild=g)
-            log.info("Slash commands sync (guild): %d comandos", len(synced))
+            msg = f"[SYNC OK] Slash commands sync (guild): {len(synced)} comandos"
+            log.info(msg)
+            print(msg, flush=True)
             # Éxito: ahora sí limpiamos globales para evitar duplicados
             try:
                 await client.http.bulk_upsert_global_commands(client.user.id, [])
@@ -9060,10 +9090,12 @@ async def on_ready():
                 pass
             return
         except discord.Forbidden:
-            log.warning("Forbidden en guild sync (scope applications.commands no otorgado). Intentando global sync.")
+            msg = "[SYNC WARN] Forbidden en guild sync (scope applications.commands no otorgado). Intentando global sync."
+            log.warning(msg); print(msg, flush=True)
         except discord.HTTPException as e:
             if e.status == 429:
-                log.warning("Rate limit en guild sync (%s). Los comandos existentes siguen activos.", e.retry_after)
+                msg = f"[SYNC WARN] Rate limit en guild sync (retry_after={e.retry_after}). Los comandos existentes siguen activos."
+                log.warning(msg); print(msg, flush=True)
                 return
             log.exception("HTTPException en guild sync, intento global")
         except Exception:
@@ -9072,13 +9104,13 @@ async def on_ready():
     # 2) Fallback: sync global (sin limpiar comandos antes)
     try:
         synced = await tree.sync()
-        log.info(
-            "Slash commands sync global: %d (puede tardar hasta 1h en aparecer)",
-            len(synced),
-        )
+        msg = f"[SYNC OK] Slash commands sync global: {len(synced)} (puede tardar hasta 1h en aparecer)"
+        log.info(msg)
+        print(msg, flush=True)
     except discord.HTTPException as e:
         if e.status == 429:
-            log.warning("Rate limit en global sync. Los comandos existentes siguen activos hasta la próxima sincronización.")
+            msg = "[SYNC WARN] Rate limit en global sync. Los comandos existentes siguen activos hasta la próxima sincronización."
+            log.warning(msg); print(msg, flush=True)
         else:
             log.exception("HTTPException en global sync")
     except Exception:

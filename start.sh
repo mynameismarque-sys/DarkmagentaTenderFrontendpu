@@ -171,30 +171,38 @@ fi
 
 echo "=== Setup completo — libs: $(ls "$PW_LIBS_DIR" 2>/dev/null | tr '\n' ' ') ==="
 
-# ── Matar health-check y arrancar bot ────────────────────────────────────────
-echo "=== Parando health-check (PID=$HEALTH_PID) ==="
-kill $HEALTH_PID 2>/dev/null || true
-trap - EXIT
-sleep 0.3
-
+# ── Arrancar bot en background, luego matar health-check ─────────────────────
+# Flask tiene retry integrado: si el puerto 5000 sigue ocupado por el health-check
+# cuando Python arranca, reintenta cada 0.5s hasta tomarlo.
 echo "=== Iniciando bot ==="
-# Loop permanente: reinicia ante cualquier crash con backoff exponencial.
-# Código 0 = salida limpia intencional (única que detiene el loop).
 _BOT_CRASH=0
-while true; do
-    python -u main.py && _exit_code=0 || _exit_code=$?
-    if [ $_exit_code -eq 0 ]; then
-        echo "=== Bot terminó limpiamente ==="
-        break
-    fi
-    _BOT_CRASH=$((_BOT_CRASH + 1))
-    # Backoff corto: 3s, 6s, 9s... máx 15s para minimizar tiempo offline
-    _wait=$((_BOT_CRASH * 3))
-    [ $_wait -gt 15 ] && _wait=15
-    if [ $_exit_code -eq 42 ]; then
-        echo "=== Discord 503 — reintento #${_BOT_CRASH} en ${_wait}s... ==="
-    else
-        echo "=== Bot crasheó (exit ${_exit_code}) — reintento #${_BOT_CRASH} en ${_wait}s... ==="
-    fi
-    sleep $_wait
-done
+(
+    while true; do
+        python -u main.py && _exit_code=0 || _exit_code=$?
+        if [ $_exit_code -eq 0 ]; then
+            echo "=== Bot terminó limpiamente ==="
+            break
+        fi
+        _BOT_CRASH=$((_BOT_CRASH + 1))
+        _wait=$((_BOT_CRASH * 3))
+        [ $_wait -gt 15 ] && _wait=15
+        if [ $_exit_code -eq 42 ]; then
+            echo "=== Discord 503 — reintento #${_BOT_CRASH} en ${_wait}s... ==="
+        else
+            echo "=== Bot crasheó (exit ${_exit_code}) — reintento #${_BOT_CRASH} en ${_wait}s... ==="
+        fi
+        sleep $_wait
+    done
+) &
+BOT_PID=$!
+
+# Dar 1 segundo para que Python arranque y Flask empiece a intentar el bind
+sleep 1
+
+# Matar health-check: Flask tomará el puerto 5000 en el próximo retry (~0.5s)
+echo "=== Parando health-check (PID=$HEALTH_PID) — Flask tomará :5000 en <1s ==="
+kill $HEALTH_PID 2>/dev/null || true
+trap "kill $BOT_PID 2>/dev/null || true" EXIT
+
+# Esperar al loop del bot (proceso principal)
+wait $BOT_PID

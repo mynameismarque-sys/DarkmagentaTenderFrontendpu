@@ -193,10 +193,16 @@ def create_app(notify_callback, whatsapp_callback=None) -> Flask:
 
 
 def _serve_on(app: Flask, port: int) -> None:
-    try:
-        app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
-    except OSError as exc:
-        log.warning("No pude iniciar Flask en puerto %d: %s", port, exc)
+    import time as _time
+    for _attempt in range(120):
+        try:
+            app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+            return
+        except OSError:
+            if _attempt == 0:
+                log.info("Flask puerto %d ocupado (health-check activo) — reintentando cada 0.5s...", port)
+            _time.sleep(0.5)
+    log.warning("No pude iniciar Flask en puerto %d después de 60s de reintentos", port)
 
 
 def run_flask(app: Flask) -> None:
