@@ -6,7 +6,7 @@ REPO_LIBS_DIR="$(cd "$(dirname "$0")" && pwd)/libs"
 PW_LIBS_DIR="/tmp/pw_libs"
 SYS_RPATH="/usr/lib/x86_64-linux-gnu:/usr/lib:/lib/x86_64-linux-gnu:/lib:${PW_LIBS_DIR}"
 
-mkdir -p "$PW_LIBS_DIR"
+rm -rf "$PW_LIBS_DIR" && mkdir -p "$PW_LIBS_DIR"
 
 # ── Health-check server en puerto 8081 (INMEDIATO) ────────────────────────────
 echo "=== Levantando health-check en :8081 ==="
