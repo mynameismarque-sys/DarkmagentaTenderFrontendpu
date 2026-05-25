@@ -5953,40 +5953,36 @@ async def enviar_key_cmd(
             "/enviar-key FORZADO (sin Telegram) — key=%s dias=%d para %s",
             key, dias, usuario.id,
         )
-    elif not telegram_client.is_ready():
-        if IS_PRODUCTION:
-            await interaction.followup.send(
-                "❌ El sistema Telegram no está disponible. Intentá en unos minutos.",
-                ephemeral=True,
-            )
-            return
-        # En desarrollo sin Telegram: forzar automáticamente para que el usuario
-        # siempre reciba su key. Telegram se registrará cuando prod lo maneje.
-        log.warning(
-            "/enviar-key: dev sin Telegram — ejecutando en modo forzado automático. "
-            "key=%s dias=%d para %s",
-            key, dias, usuario.id,
-        )
-        forzar = True
     else:
+        # cmd_gen llama a _ensure_ready() internamente: si Telegram no está listo
+        # intenta reconectar hasta 3 veces antes de fallar. Nunca falla si sólo
+        # está inicializando (los primeros ~60s tras arrancar).
         try:
             await telegram_client.cmd_gen(key, dias)
             telegram_ok = True
             log.info("Key registrada en Telegram: %s (%dd) para %s", key, dias, usuario.id)
         except Exception as exc_gen:
             log.exception("Error registrando key en Telegram para %s — key=%s", usuario.id, key)
-            await interaction.followup.send(
-                f"⚠️ No se pudo registrar la key `{key}` en Telegram:\n"
-                f"```{exc_gen}```\n"
-                f"Si querés enviarla igual (sin registrar), volvé a correr el comando con `forzar:True`.",
-                ephemeral=True,
-            )
-            asyncio.create_task(_log_key(
-                "gen_error", key, usuario.id,
-                dias=dias, metodo="Admin /enviar-key", error=str(exc_gen),
-                admin_id=interaction.user.id,
-            ))
-            return
+            if not IS_PRODUCTION:
+                # En desarrollo sin Telegram: forzar automáticamente
+                log.warning(
+                    "/enviar-key: dev sin Telegram — modo forzado automático. "
+                    "key=%s dias=%d para %s", key, dias, usuario.id,
+                )
+                forzar = True
+            else:
+                await interaction.followup.send(
+                    f"⚠️ No se pudo registrar la key `{key}` en Telegram:\n"
+                    f"```{exc_gen}```\n"
+                    f"Si querés enviarla igual (sin registrar), volvé a correr el comando con `forzar:True`.",
+                    ephemeral=True,
+                )
+                asyncio.create_task(_log_key(
+                    "gen_error", key, usuario.id,
+                    dias=dias, metodo="Admin /enviar-key", error=str(exc_gen),
+                    admin_id=interaction.user.id,
+                ))
+                return
 
     # ── Entregar por DM ──────────────────────────────────────────────────────
     nota_forzar = (
