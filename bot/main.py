@@ -9650,6 +9650,134 @@ async def bypass_keys_limpiar_cmd(
     log.info("bypass-keys-limpiar: %d keys (%s) eliminadas por %s", borradas, duracion.value, interaction.user)
 
 
+@tree.command(
+    name="perfil-admin",
+    description="(Admin) Ver el perfil de afiliado completo de cualquier usuario",
+)
+@app_commands.describe(usuario="Usuario a consultar")
+async def perfil_admin_cmd(interaction: discord.Interaction, usuario: discord.Member):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    uid = str(usuario.id)
+    code        = database.get_or_create_referral_code(uid)
+    balance     = database.get_referral_balance(uid)
+    count       = database.get_referral_count(uid)
+    sales_count = database.get_referral_sales_count(uid)
+    referrer_id = database.get_referrer(uid)
+    referrer_mention = f"<@{referrer_id}>" if referrer_id else "_(ninguno)_"
+    embed = discord.Embed(
+        title=f"🔍 Perfil Afiliado (Admin) — {usuario.display_name}",
+        color=0xE74C3C,
+    )
+    embed.add_field(name="🆔 Discord ID",          value=f"`{uid}`",             inline=True)
+    embed.add_field(name="🔗 Código afiliado",      value=f"`{code}`",            inline=True)
+    embed.add_field(name="👤 Fue invitado por",     value=referrer_mention,       inline=True)
+    embed.add_field(name="👥 Referidos registrados", value=str(count),            inline=True)
+    embed.add_field(name="🛒 Ventas de referidos",  value=str(sales_count),       inline=True)
+    embed.add_field(name="💰 Saldo comisiones",     value=f"${balance:,.0f} ARS", inline=True)
+    embed.set_footer(text="Marke Panel • Admin — datos directos de la DB")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(
+    name="comision-manual",
+    description="(Admin) Acreditar manualmente una comisión de afiliado a un usuario",
+)
+@app_commands.describe(
+    usuario="Usuario al que acreditar la comisión",
+    monto="Monto en ARS a acreditar",
+    contar_venta="¿Contar como venta generada? (incrementa el contador)",
+)
+async def comision_manual_cmd(
+    interaction: discord.Interaction,
+    usuario: discord.Member,
+    monto: float,
+    contar_venta: bool = True,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    uid = str(usuario.id)
+    if contar_venta:
+        await asyncio.to_thread(database.increment_referral_sales, uid)
+    nuevo_bal = await asyncio.to_thread(database.add_referral_commission, uid, monto)
+    sales_count = database.get_referral_sales_count(uid)
+    await interaction.followup.send(
+        f"✅ **Comisión acreditada manualmente.**\n\n"
+        f"👤 Usuario: {usuario.mention}\n"
+        f"💰 Monto acreditado: **${monto:,.0f} ARS**\n"
+        f"💳 Saldo total: **${nuevo_bal:,.0f} ARS**\n"
+        f"🛒 Ventas registradas: **{sales_count}**",
+        ephemeral=True,
+    )
+    log.info("comision-manual: $%.0f a %s por %s (venta=%s)", monto, uid, interaction.user, contar_venta)
+    try:
+        await usuario.send(
+            f"💰 **¡Comisión acreditada!**\n"
+            f"Un administrador te acreditó **${monto:,.0f} ARS** de comisión.\n"
+            f"Saldo total acumulado: **${nuevo_bal:,.0f} ARS**\n\n"
+            f"Usá `/perfil` para ver tu saldo."
+        )
+    except Exception:
+        pass
+
+
+@tree.command(
+    name="referido-vincular",
+    description="(Admin) Vincular manualmente un usuario como referido de otro",
+)
+@app_commands.describe(
+    referido="Usuario que fue invitado",
+    invitador="Usuario que lo invitó (el afiliado)",
+)
+async def referido_vincular_cmd(
+    interaction: discord.Interaction,
+    referido: discord.Member,
+    invitador: discord.Member,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    referido_id   = str(referido.id)
+    invitador_id  = str(invitador.id)
+    if referido_id == invitador_id:
+        await interaction.followup.send("❌ Un usuario no puede ser referido de sí mismo.", ephemeral=True)
+        return
+    existing = database.get_referrer(referido_id)
+    if existing:
+        await interaction.followup.send(
+            f"⚠️ {referido.mention} ya está vinculado como referido de <@{existing}>.\n"
+            f"No se puede cambiar el vínculo.",
+            ephemeral=True,
+        )
+        return
+    ok = await asyncio.to_thread(database.register_referral, invitador_id, referido_id)
+    if ok:
+        nuevo_count = database.get_referral_count(invitador_id)
+        await interaction.followup.send(
+            f"✅ Vínculo registrado.\n\n"
+            f"👤 Referido: {referido.mention}\n"
+            f"🔗 Invitador: {invitador.mention}\n"
+            f"👥 Total referidos de {invitador.display_name}: **{nuevo_count}**",
+            ephemeral=True,
+        )
+        log.info("referido-vincular: %s → %s por admin %s", referido_id, invitador_id, interaction.user)
+        try:
+            await invitador.send(
+                f"🎉 **¡Nuevo referido vinculado por un admin!**\n"
+                f"{referido.display_name} quedó registrado como tu referido.\n"
+                f"Cada vez que compre vas a ganar **30%** de comisión. 💰"
+            )
+        except Exception:
+            pass
+    else:
+        await interaction.followup.send("❌ No se pudo registrar el vínculo. Intentá de nuevo.", ephemeral=True)
+
+
 async def _monitor_prod_session_and_close_gateway() -> None:
     """Dev: sale del proceso cuando prod toma la sesión de Telegram.
 
