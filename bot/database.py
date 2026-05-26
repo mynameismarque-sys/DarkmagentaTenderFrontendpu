@@ -228,6 +228,20 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_bypass_orders_user "
             "ON bypass_orders(discord_id, pack_id)"
         )
+        # Stock de keys de Bypass-UID (1d / 7d / 30d)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bypass_keys (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_value  TEXT NOT NULL,
+                duration   TEXT NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0,
+                discord_id TEXT,
+                used_at    DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         conn.commit()
 
 
@@ -452,6 +466,62 @@ def get_bypass_order_ff_id(discord_id: str, pack_id: str) -> str:
             (str(discord_id), str(pack_id)),
         ).fetchone()
         return row["ff_id"] if row else ""
+
+
+# ---------------------------------------------------------------------------
+# Bypass keys stock
+# ---------------------------------------------------------------------------
+
+def add_bypass_keys(keys: list[str], duration: str) -> int:
+    """Agrega una lista de keys al stock para la duración dada. Retorna cuántas se agregaron."""
+    duration = duration.strip().lower()
+    added = 0
+    with _lock, _connect() as conn:
+        for k in keys:
+            k = k.strip()
+            if not k:
+                continue
+            conn.execute(
+                "INSERT INTO bypass_keys (key_value, duration) VALUES (?, ?)",
+                (k, duration),
+            )
+            added += 1
+        conn.commit()
+    return added
+
+
+def pop_bypass_key(duration: str, discord_id: str = "") -> str:
+    """Obtiene y marca como usada la key disponible más antigua para esa duración.
+    Retorna la key o '' si no hay stock."""
+    duration = duration.strip().lower()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT id, key_value FROM bypass_keys "
+            "WHERE duration = ? AND used = 0 ORDER BY created_at ASC LIMIT 1",
+            (duration,),
+        ).fetchone()
+        if not row:
+            return ""
+        conn.execute(
+            "UPDATE bypass_keys SET used = 1, discord_id = ?, used_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (str(discord_id) or None, row["id"]),
+        )
+        conn.commit()
+        return row["key_value"]
+
+
+def count_bypass_keys() -> dict[str, int]:
+    """Retorna el conteo de keys disponibles por duración: {'1d': N, '7d': N, '30d': N}."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT duration, COUNT(*) as cnt FROM bypass_keys "
+            "WHERE used = 0 GROUP BY duration"
+        ).fetchall()
+    result = {"1d": 0, "7d": 0, "30d": 0}
+    for r in rows:
+        result[r["duration"]] = r["cnt"]
+    return result
 
 
 def payment_exists(payment_id: str) -> bool:

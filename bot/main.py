@@ -2830,7 +2830,7 @@ async def _acreditar_pago_aprobado(
             )
             embed_bp.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
             await user.send(embed=embed_bp)
-            # Avisar al admin
+            # Avisar al admin con botón de entrega
             try:
                 canal_ventas = await _obtener_canal_ventas()
                 if canal_ventas:
@@ -2841,7 +2841,8 @@ async def _acreditar_pago_aprobado(
                         f"Pack: **{pack.nombre}** ({dias_bp}d) — ${pack.precio:,.0f} ARS\n"
                         f"🎮 **FF ID (UID):** `{ff_id_bp or 'NO ENCONTRADO'}`\n"
                         f"Pago: **{metodo_bp}** ✅\n"
-                        f"Enviar el archivo de Bypass-UID configurado para ese UID por DM al usuario."
+                        f"Presioná el botón para aprobar la ID y entregar la key.",
+                        view=BypassApproveView(),
                     )
             except Exception:
                 log.exception("No pude notificar bypass en ventas para op=%s", op_id)
@@ -7299,7 +7300,7 @@ class BypassTrialFFIDModal(discord.ui.Modal):
         except Exception:
             log.exception("No pude guardar bypass_order trial para %s", discord_id)
 
-        # Notificar al admin en #ventas
+        # Notificar al admin en #ventas con botón de entrega
         try:
             canal_ventas = await _obtener_canal_ventas()
             if canal_ventas:
@@ -7307,7 +7308,8 @@ class BypassTrialFFIDModal(discord.ui.Modal):
                     f"🆓 **BYPASS-UID PRUEBA GRATUITA**\n"
                     f"Usuario: {interaction.user.mention} (`{interaction.user}` / `{discord_id}`)\n"
                     f"🎮 **FF ID:** `{ff_id}`\n"
-                    f"Enviar el archivo de Bypass-UID de 1 día por DM al usuario."
+                    f"Presioná el botón para aprobar la ID y entregar la key.",
+                    view=BypassApproveView(),
                 )
         except Exception:
             log.exception("No pude notificar en ventas prueba bypass para %s", discord_id)
@@ -7501,6 +7503,98 @@ class BypassMetodoPagoView(_SafeViewMixin, discord.ui.View):
                 pack=pack, discord_id=discord_id, user_id=user_id,
                 username=username, channel_id=channel_id, ff_id=ff_id,
             )
+        )
+
+
+class BypassApproveView(_SafeViewMixin, discord.ui.View):
+    """Botón persistente para que el admin apruebe la ID y entregue la key de Bypass-UID."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="✅ ID Aprobada — Entregar Key",
+        style=discord.ButtonStyle.success,
+        custom_id="bypass_id_aprobada",
+    )
+    async def btn_entregar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        import re as _re
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+
+        msg = interaction.message
+        content = msg.content if msg else ""
+
+        # --- Parsear datos del mensaje de #ventas ---
+        m_user = _re.search(r"<@(\d+)>", content)
+        if not m_user:
+            await interaction.followup.send("❌ No encontré al usuario en el mensaje.", ephemeral=True)
+            return
+        discord_id = m_user.group(1)
+
+        # Duración: buscar patrón (Xd) para pagos; trial = 1d
+        m_dur = _re.search(r"\((\d+)d\)", content)
+        duration = f"{m_dur.group(1)}d" if m_dur else "1d"
+
+        # FF ID: línea con "FF ID"
+        m_ff = _re.search(r"FF ID[^\`]*`(\w+)`", content)
+        ff_id = m_ff.group(1) if m_ff else "N/D"
+
+        # --- Tomar key del stock ---
+        key = await asyncio.to_thread(database.pop_bypass_key, duration, discord_id)
+        if not key:
+            stock = await asyncio.to_thread(database.count_bypass_keys)
+            await interaction.followup.send(
+                f"❌ **Sin stock de keys de {duration}.**\n"
+                f"Stock actual: 1d={stock['1d']} | 7d={stock['7d']} | 30d={stock['30d']}\n"
+                f"Cargá más con `/bypass-keys cargar`.",
+                ephemeral=True,
+            )
+            return
+
+        # --- Enviar DM al usuario con la key ---
+        try:
+            user = await client.fetch_user(int(discord_id))
+            dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}.get(duration, duration)
+            embed_key = discord.Embed(
+                title="✅ ¡Tu ID fue aprobada! — Bypass-UID",
+                description=(
+                    f"🎮 **FF ID:** `{ff_id}`\n"
+                    f"⏱ **Plan:** {dur_label}\n\n"
+                    f"🔑 **Tu Key de Bypass-UID:**\n"
+                    f"```\n{key}\n```\n"
+                    "Usá esta key junto con los archivos descargados del canal `🖥・bypass-uid`.\n\n"
+                    "¡Cualquier duda consultá a un admin! 🛡️"
+                ),
+                color=0x2ECC71,
+            )
+            embed_key.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
+            await user.send(embed=embed_key)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"❌ No pude enviar DM (usuario bloqueó los mensajes privados).\n"
+                f"Key reservada: `{key}` — enviásela manualmente.",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            log.exception("Error enviando key bypass por DM a %s", discord_id)
+            await interaction.followup.send(
+                f"❌ Error al enviar DM. Key: `{key}`", ephemeral=True
+            )
+            return
+
+        # --- Deshabilitar botón y marcar mensaje como entregado ---
+        button.label = "✅ Key Entregada"
+        button.disabled = True
+        button.style = discord.ButtonStyle.secondary
+        nuevo_contenido = (content or "") + f"\n\n✅ **Key entregada** por {interaction.user.mention}"
+        try:
+            await msg.edit(content=nuevo_contenido, view=self)
+        except Exception:
+            log.warning("No pude editar el mensaje de ventas tras entregar key bypass")
+
+        await interaction.followup.send(
+            f"✅ Key `{key}` enviada por DM a <@{discord_id}> ({duration}).", ephemeral=True
         )
 
 
@@ -9441,6 +9535,70 @@ async def deshabilitar_chat_cmd(interaction: discord.Interaction):
     log.info("deshabilitar-chat: desactivado por %s", interaction.user)
 
 
+@tree.command(
+    name="bypass-keys-cargar",
+    description="(Admin) Cargar keys de Bypass-UID al stock",
+)
+@app_commands.describe(
+    duracion="Duración de las keys a cargar",
+    keys="Keys separadas por comas (ej: KEY1,KEY2,KEY3)",
+)
+@app_commands.choices(duracion=[
+    app_commands.Choice(name="1 Día", value="1d"),
+    app_commands.Choice(name="7 Días", value="7d"),
+    app_commands.Choice(name="30 Días", value="30d"),
+])
+async def bypass_keys_cargar_cmd(
+    interaction: discord.Interaction,
+    duracion: app_commands.Choice[str],
+    keys: str,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    lista = [k.strip() for k in keys.split(",") if k.strip()]
+    if not lista:
+        await interaction.followup.send("❌ No encontré ninguna key. Separalas con comas.", ephemeral=True)
+        return
+    agregadas = await asyncio.to_thread(database.add_bypass_keys, lista, duracion.value)
+    stock = await asyncio.to_thread(database.count_bypass_keys)
+    await interaction.followup.send(
+        f"✅ **{agregadas} keys de {duracion.name} cargadas al stock.**\n\n"
+        f"📦 **Stock actual:**\n"
+        f"🖥️ 1 Día — `{stock['1d']}` keys\n"
+        f"🖥️ 7 Días — `{stock['7d']}` keys\n"
+        f"🖥️ 30 Días — `{stock['30d']}` keys",
+        ephemeral=True,
+    )
+    log.info("bypass-keys-cargar: %d keys (%s) cargadas por %s", agregadas, duracion.value, interaction.user)
+
+
+@tree.command(
+    name="bypass-keys-stock",
+    description="(Admin) Ver el stock actual de keys de Bypass-UID",
+)
+async def bypass_keys_stock_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    stock = await asyncio.to_thread(database.count_bypass_keys)
+    total = sum(stock.values())
+    embed = discord.Embed(
+        title="📦 Stock de Keys — Bypass-UID",
+        description=(
+            f"🖥️ **1 Día** — `{stock['1d']}` keys disponibles\n"
+            f"🖥️ **7 Días** — `{stock['7d']}` keys disponibles\n"
+            f"🖥️ **30 Días** — `{stock['30d']}` keys disponibles\n\n"
+            f"**Total: `{total}` keys**"
+        ),
+        color=0x1ABC9C if total > 0 else 0xE74C3C,
+    )
+    embed.set_footer(text="Marke Panel • Bypass-UID — /bypass-keys-cargar para agregar más")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 async def _monitor_prod_session_and_close_gateway() -> None:
     """Dev: sale del proceso cuando prod toma la sesión de Telegram.
 
@@ -9519,6 +9677,7 @@ async def on_ready():
     client.add_view(PostulacionView())
     client.add_view(BypassInfoView())
     client.add_view(BypassPackView())
+    client.add_view(BypassApproveView())
     asyncio.create_task(_actualizar_perfil())
     asyncio.create_task(_configurar_canal_verificacion())
     asyncio.create_task(_postear_verificacion())
@@ -10156,7 +10315,7 @@ def _notificar_pago(
                     await user.send(embed=embed_bypass)
                 except discord.Forbidden:
                     log.warning("No pude enviar DM bypass a %s — DM bloqueado", discord_id)
-                # Notificar al admin en #ventas con el FF ID para entrega manual
+                # Notificar al admin en #ventas con el FF ID y botón de entrega
                 try:
                     canal_ventas = await _obtener_canal_ventas()
                     if canal_ventas:
@@ -10166,7 +10325,8 @@ def _notificar_pago(
                             f"Pack: **{pack.nombre}** ({dias_bypass}d) — ${pack.precio:,.0f} ARS\n"
                             f"🎮 **FF ID (UID):** `{ff_id_bypass or 'NO ENCONTRADO'}`\n"
                             f"Pago: **Mercado Pago** ✅\n"
-                            f"Enviar el archivo de Bypass-UID configurado para ese UID por DM al usuario."
+                            f"Presioná el botón para aprobar la ID y entregar la key.",
+                            view=BypassApproveView(),
                         )
                 except Exception:
                     log.exception("No pude notificar bypass en ventas para %s", discord_id)
