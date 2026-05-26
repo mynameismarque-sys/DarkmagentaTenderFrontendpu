@@ -9557,14 +9557,24 @@ async def bypass_keys_cargar_cmd(
     if not _puede_registrar(interaction):
         await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
         return
-    lista = [k.strip() for k in keys.split(",") if k.strip()]
+    # Soportar separadores: coma, punto y coma, salto de línea, o combinaciones
+    import re as _re
+    lista = [k.strip() for k in _re.split(r"[,;\n\r]+", keys) if k.strip()]
     if not lista:
-        await interaction.followup.send("❌ No encontré ninguna key. Separalas con comas.", ephemeral=True)
+        await interaction.followup.send("❌ No encontré ninguna key. Pegá las keys separadas por comas o en líneas.", ephemeral=True)
+        return
+    # Validación básica: descartar entradas con espacios en medio (probablemente pegado incorrecto)
+    lista_valida = [k for k in lista if " " not in k]
+    lista_invalida = len(lista) - len(lista_valida)
+    lista = lista_valida
+    if not lista:
+        await interaction.followup.send("❌ Ninguna key válida encontrada (no deben tener espacios en medio).", ephemeral=True)
         return
     agregadas = await asyncio.to_thread(database.add_bypass_keys, lista, duracion.value)
     stock = await asyncio.to_thread(database.count_bypass_keys)
+    aviso_invalidas = f"\n⚠️ {lista_invalida} entradas descartadas (tenían espacios)." if lista_invalida else ""
     await interaction.followup.send(
-        f"✅ **{agregadas} keys de {duracion.name} cargadas al stock.**\n\n"
+        f"✅ **{agregadas} keys de {duracion.name} cargadas al stock.**{aviso_invalidas}\n\n"
         f"📦 **Stock actual:**\n"
         f"🖥️ 1 Día — `{stock['1d']}` keys\n"
         f"🖥️ 7 Días — `{stock['7d']}` keys\n"
@@ -9597,6 +9607,38 @@ async def bypass_keys_stock_cmd(interaction: discord.Interaction):
     )
     embed.set_footer(text="Marke Panel • Bypass-UID — /bypass-keys-cargar para agregar más")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(
+    name="bypass-keys-limpiar",
+    description="(Admin) Borrar TODAS las keys no usadas de una duración (para recargar desde cero)",
+)
+@app_commands.describe(duracion="Duración cuyas keys querés borrar")
+@app_commands.choices(duracion=[
+    app_commands.Choice(name="1 Día", value="1d"),
+    app_commands.Choice(name="7 Días", value="7d"),
+    app_commands.Choice(name="30 Días", value="30d"),
+])
+async def bypass_keys_limpiar_cmd(
+    interaction: discord.Interaction,
+    duracion: app_commands.Choice[str],
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    borradas = await asyncio.to_thread(database.clear_bypass_keys, duracion.value)
+    stock = await asyncio.to_thread(database.count_bypass_keys)
+    await interaction.followup.send(
+        f"🗑️ **{borradas} keys de {duracion.name} eliminadas del stock.**\n\n"
+        f"📦 **Stock actual:**\n"
+        f"🖥️ 1 Día — `{stock['1d']}` keys\n"
+        f"🖥️ 7 Días — `{stock['7d']}` keys\n"
+        f"🖥️ 30 Días — `{stock['30d']}` keys\n\n"
+        f"Ahora podés cargar las keys correctas con `/bypass-keys-cargar`.",
+        ephemeral=True,
+    )
+    log.info("bypass-keys-limpiar: %d keys (%s) eliminadas por %s", borradas, duracion.value, interaction.user)
 
 
 async def _monitor_prod_session_and_close_gateway() -> None:

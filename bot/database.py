@@ -524,6 +524,18 @@ def count_bypass_keys() -> dict[str, int]:
     return result
 
 
+def clear_bypass_keys(duration: str) -> int:
+    """Elimina todas las keys NO usadas para la duración dada. Retorna cuántas se borraron."""
+    duration = duration.strip().lower()
+    with _lock, _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM bypass_keys WHERE duration = ? AND used = 0",
+            (duration,),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def payment_exists(payment_id: str) -> bool:
     with _connect() as conn:
         row = conn.execute(
