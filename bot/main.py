@@ -7562,7 +7562,12 @@ class BypassApproveView(_SafeViewMixin, discord.ui.View):
                     f"⏱ **Plan:** {dur_label}\n\n"
                     f"🔑 **Tu Key de Bypass-UID:**\n"
                     f"```\n{key}\n```\n"
-                    "Usá esta key junto con los archivos descargados del canal `🖥・bypass-uid`.\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "**📋 Pasos para activar:**\n"
+                    "1️⃣ Mirá el tutorial de YouTube (link abajo).\n"
+                    "2️⃣ Descargá los archivos del canal `🖥・bypass-uid`.\n"
+                    "3️⃣ Usá la key de arriba para activar el bypass.\n\n"
+                    "🎬 **Tutorial:** https://youtu.be/AHry87POfr4?si=MSnSnIXp_NKfLwrO\n\n"
                     "¡Cualquier duda consultá a un admin! 🛡️"
                 ),
                 color=0x2ECC71,
@@ -7905,7 +7910,8 @@ async def _setup_canal_bypass() -> None:
         log.exception("Error configurando permisos de #bypass-uid")
 
     BYPASS_FILES_URL = "https://1drv.ms/f/c/11cf00aa9d66ffe2/IgDkpuZP4hVlSb9l5iGe_MSjAbcGql7dR1U0cc0Ip2KgvNg?e=5H2WTr"
-    _BYPASS_PANEL_VER = "panel_v2"
+    BYPASS_VIDEO_URL = "https://youtu.be/AHry87POfr4?si=MSnSnIXp_NKfLwrO"
+    _BYPASS_PANEL_VER = "panel_v3"
 
     # 6. Postear embed — repostear si no existe o si es versión vieja
     embed_encontrado = False
@@ -7916,12 +7922,12 @@ async def _setup_canal_bypass() -> None:
                     embed_encontrado = True
                     break
             if not embed_encontrado:
-                # Embed viejo (sin versión o sin link de archivos) → borrar y repostear
+                # Embed viejo → borrar y repostear con video
                 for e in msg.embeds:
                     if e.title and "Bypass-UID" in e.title and "panel" in (e.footer.text or "").lower():
                         try:
                             await msg.delete()
-                            log.info("Embed bypass viejo borrado para repostear con link de archivos.")
+                            log.info("Embed bypass viejo borrado para repostear con video.")
                         except Exception:
                             pass
                         break
@@ -7942,16 +7948,19 @@ async def _setup_canal_bypass() -> None:
                 "🖥️ **7 Días** — $7.000 ARS\n"
                 "🖥️ **30 Días** — $14.000 ARS\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**🎬 Tutorial de instalación:**\n"
+                f"[▶️ Ver video en YouTube]({BYPASS_VIDEO_URL})\n\n"
                 f"**📁 Archivos necesarios:**\n"
                 f"[📥 Descargar archivos del Bypass-UID]({BYPASS_FILES_URL})\n"
-                "_(Descargalos antes de activar el bypass)_\n\n"
+                "_(Mirá el video y descargá los archivos antes de activar el bypass)_\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "**¿Cómo funciona?**\n"
-                "1️⃣ Descargá los archivos con el link de arriba.\n"
-                "2️⃣ Presioná **🛒 Comprar** y elegí el plan.\n"
-                "3️⃣ Ingresá tu **ID de Free Fire** (UID).\n"
-                "4️⃣ Pagá con Mercado Pago, Transferencia o Binance.\n"
-                "5️⃣ Recibís las instrucciones de activación por mensaje privado. 📩\n\n"
+                "1️⃣ Mirá el tutorial de YouTube.\n"
+                "2️⃣ Descargá los archivos con el link de arriba.\n"
+                "3️⃣ Presioná **🛒 Comprar** y elegí el plan.\n"
+                "4️⃣ Ingresá tu **ID de Free Fire** (UID).\n"
+                "5️⃣ Pagá con Mercado Pago, Transferencia o Binance.\n"
+                "6️⃣ Recibís la key de activación por mensaje privado. 📩\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🆓 Primera vez podés probar **1 día gratis** con el botón de abajo."
                 "\n━━━━━━━━━━━━━━━━━━━━━━━━"
