@@ -2813,39 +2813,48 @@ async def _acreditar_pago_aprobado(
             )
             await _enviar_entrega_ios(user, pack)
         elif pack.categoria == "bypass":
-            # Bypass-UID → notificar al usuario + avisar al admin
+            # Bypass-UID → intentar entrega automática desde stock, si no hay stock → botón manual
             ff_id_bp  = op.get("ff_id") or database.get_bypass_order_ff_id(discord_id, pack.id)
             dias_bp   = int(pack.creditos)
-            embed_bp  = discord.Embed(
-                title="✅ ¡Pago aprobado! — Bypass-UID",
-                description=(
-                    f"Tu operación `#{op_id}` fue confirmada.\n\n"
-                    f"🎮 **ID de Free Fire:** `{ff_id_bp or 'N/D'}`\n"
-                    f"⏱ **Duración:** {dias_bp} día{'s' if dias_bp != 1 else ''}\n\n"
-                    "Tu archivo de Bypass-UID está siendo preparado para tu UID. "
-                    "Te lo enviamos por este chat en breve. 📩\n\n"
-                    "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
-                ),
-                color=0x1ABC9C,
+            duration_bp = f"{dias_bp}d"
+            metodo_bp = "Naranja X" if op_id.startswith(("NX-", "BPN-")) else "Binance"
+            auto_ok = await _entregar_bypass_key_auto(
+                user, discord_id, ff_id_bp, duration_bp,
+                pack.nombre, op_id, metodo_bp,
             )
-            embed_bp.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
-            await user.send(embed=embed_bp)
-            # Avisar al admin con botón de entrega
-            try:
-                canal_ventas = await _obtener_canal_ventas()
-                if canal_ventas:
-                    metodo_bp = "Naranja X" if op_id.startswith(("NX-", "BPN-")) else "Binance"
-                    await canal_ventas.send(
-                        f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA**\n"
-                        f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
-                        f"Pack: **{pack.nombre}** ({dias_bp}d) — ${pack.precio:,.0f} ARS\n"
-                        f"🎮 **FF ID (UID):** `{ff_id_bp or 'NO ENCONTRADO'}`\n"
-                        f"Pago: **{metodo_bp}** ✅\n"
-                        f"Presioná el botón para aprobar la ID y entregar la key.",
-                        view=BypassApproveView(),
+            if not auto_ok:
+                # Sin stock → notificar al usuario que la key llega pronto + botón manual para admin
+                try:
+                    await user.send(
+                        embed=discord.Embed(
+                            title="✅ ¡Pago aprobado! — Bypass-UID",
+                            description=(
+                                f"Tu operación `#{op_id}` fue confirmada.\n\n"
+                                f"🎮 **ID de Free Fire:** `{ff_id_bp or 'N/D'}`\n"
+                                f"⏱ **Duración:** {dias_bp} día{'s' if dias_bp != 1 else ''}\n\n"
+                                "Tu archivo de Bypass-UID está siendo preparado. "
+                                "Te lo enviamos por este chat en breve. 📩\n\n"
+                                "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
+                            ),
+                            color=0x1ABC9C,
+                        )
                     )
-            except Exception:
-                log.exception("No pude notificar bypass en ventas para op=%s", op_id)
+                except Exception:
+                    pass
+                try:
+                    canal_ventas = await _obtener_canal_ventas()
+                    if canal_ventas:
+                        await canal_ventas.send(
+                            f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA** ⚠️ (sin stock automático)\n"
+                            f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                            f"Pack: **{pack.nombre}** ({duration_bp}) — ${pack.precio:,.0f} ARS\n"
+                            f"🎮 **FF ID (UID):** `{ff_id_bp or 'NO ENCONTRADO'}`\n"
+                            f"Pago: **{metodo_bp}** ✅\n"
+                            f"Presioná el botón para aprobar la ID y entregar la key.",
+                            view=BypassApproveView(),
+                        )
+                except Exception:
+                    log.exception("No pude notificar bypass en ventas para op=%s", op_id)
         else:
             # Proxy → enviar key por DM
             dias_proxy = int(pack.creditos)
@@ -7506,6 +7515,76 @@ class BypassMetodoPagoView(_SafeViewMixin, discord.ui.View):
         )
 
 
+async def _entregar_bypass_key_auto(
+    user: discord.User,
+    discord_id: str,
+    ff_id: str | None,
+    duration: str,
+    pack_nombre: str,
+    op_id: str,
+    metodo: str,
+) -> bool:
+    """Intenta entregar automáticamente una key de Bypass-UID desde el stock.
+
+    Devuelve True si la key fue entregada, False si no había stock (fallback manual).
+    """
+    dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}.get(duration, duration)
+    key = await asyncio.to_thread(database.pop_bypass_key, duration, discord_id)
+    if not key:
+        return False
+
+    # Enviar DM con la key
+    embed_key = discord.Embed(
+        title="✅ ¡Tu ID fue aprobada! — Bypass-UID",
+        description=(
+            f"🎮 **FF ID:** `{ff_id or 'N/D'}`\n"
+            f"⏱ **Plan:** {dur_label}\n\n"
+            f"🔑 **Tu Key de Bypass-UID:**\n"
+            f"```\n{key}\n```\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "**📋 Pasos para activar:**\n"
+            "1️⃣ Mirá el tutorial de YouTube (link abajo).\n"
+            "2️⃣ Descargá los archivos del canal `🖥・bypass-uid`.\n"
+            "3️⃣ Usá la key de arriba para activar el bypass.\n\n"
+            "🎬 **Tutorial:** https://youtu.be/AHry87POfr4?si=MSnSnIXp_NKfLwrO\n\n"
+            "¡Cualquier duda consultá a un admin! 🛡️"
+        ),
+        color=0x2ECC71,
+    )
+    embed_key.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
+    dm_ok = False
+    try:
+        await user.send(embed=embed_key)
+        dm_ok = True
+        log.info("bypass auto-entrega: key=%s dur=%s user=%s op=%s", key, duration, discord_id, op_id)
+    except discord.Forbidden:
+        log.warning("bypass auto-entrega: DM bloqueado para %s — key=%s", discord_id, key)
+    except Exception:
+        log.exception("bypass auto-entrega: error DM para %s — key=%s", discord_id, key)
+
+    # Notificar en #ventas que la key fue entregada automáticamente
+    try:
+        canal_ventas = await _obtener_canal_ventas()
+        if canal_ventas:
+            if dm_ok:
+                await canal_ventas.send(
+                    f"🖥️ **BYPASS-UID — KEY ENTREGADA AUTOMÁTICAMENTE** ✅\n"
+                    f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                    f"Pack: **{pack_nombre}** ({duration}) | Pago: **{metodo}** ✅\n"
+                    f"🎮 **FF ID:** `{ff_id or 'N/D'}` | 🔑 Key: ||`{key}`||"
+                )
+            else:
+                await canal_ventas.send(
+                    f"🖥️ **BYPASS-UID — KEY GENERADA (DM fallido)** ⚠️\n"
+                    f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                    f"🔑 Key: `{key}` ({duration}) — **enviársela manualmente**."
+                )
+    except Exception:
+        log.exception("bypass auto-entrega: error notificando en ventas para %s", discord_id)
+
+    return True
+
+
 class BypassApproveView(_SafeViewMixin, discord.ui.View):
     """Botón persistente para que el admin apruebe la ID y entregue la key de Bypass-UID."""
 
@@ -10474,41 +10553,47 @@ def _notificar_pago(
                 await _enviar_entrega_ios(user, pack)
 
             elif pack.categoria == "bypass":
-                # Bypass-UID: entrega manual — notificar al admin con el FF ID
+                # Bypass-UID → intentar entrega automática desde stock, si no hay → botón manual
                 ff_id_bypass = database.get_bypass_order_ff_id(discord_id, pack.id)
                 dias_bypass  = int(pack.creditos)
-                embed_bypass = discord.Embed(
-                    title="✅ ¡Pago aprobado! — Bypass-UID",
-                    description=(
-                        f"Recibimos tu pago del plan **{pack.nombre}**.\n\n"
-                        f"🎮 **ID de Free Fire:** `{ff_id_bypass or 'N/D'}`\n"
-                        f"⏱ **Duración:** {dias_bypass} día{'s' if dias_bypass != 1 else ''}\n\n"
-                        "Tu archivo de Bypass-UID está siendo preparado para tu UID. "
-                        "Te lo enviamos por este chat en breve. 📩\n\n"
-                        "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
-                    ),
-                    color=0x1ABC9C,
+                duration_bypass = f"{dias_bypass}d"
+                auto_ok_mp = await _entregar_bypass_key_auto(
+                    user, discord_id, ff_id_bypass, duration_bypass,
+                    pack.nombre, payment_id, "Mercado Pago",
                 )
-                embed_bypass.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
-                try:
-                    await user.send(embed=embed_bypass)
-                except discord.Forbidden:
-                    log.warning("No pude enviar DM bypass a %s — DM bloqueado", discord_id)
-                # Notificar al admin en #ventas con el FF ID y botón de entrega
-                try:
-                    canal_ventas = await _obtener_canal_ventas()
-                    if canal_ventas:
-                        await canal_ventas.send(
-                            f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA**\n"
-                            f"Usuario: <@{discord_id}> (`{discord_id}`)\n"
-                            f"Pack: **{pack.nombre}** ({dias_bypass}d) — ${pack.precio:,.0f} ARS\n"
-                            f"🎮 **FF ID (UID):** `{ff_id_bypass or 'NO ENCONTRADO'}`\n"
-                            f"Pago: **Mercado Pago** ✅\n"
-                            f"Presioná el botón para aprobar la ID y entregar la key.",
-                            view=BypassApproveView(),
-                        )
-                except Exception:
-                    log.exception("No pude notificar bypass en ventas para %s", discord_id)
+                if not auto_ok_mp:
+                    # Sin stock → avisar al usuario + botón manual para admin
+                    embed_bypass = discord.Embed(
+                        title="✅ ¡Pago aprobado! — Bypass-UID",
+                        description=(
+                            f"Recibimos tu pago del plan **{pack.nombre}**.\n\n"
+                            f"🎮 **ID de Free Fire:** `{ff_id_bypass or 'N/D'}`\n"
+                            f"⏱ **Duración:** {dias_bypass} día{'s' if dias_bypass != 1 else ''}\n\n"
+                            "Tu archivo de Bypass-UID está siendo preparado. "
+                            "Te lo enviamos por este chat en breve. 📩\n\n"
+                            "¡Gracias por tu compra en **Sensi Marke**! 🖥️"
+                        ),
+                        color=0x1ABC9C,
+                    )
+                    embed_bypass.set_footer(text="Marke Panel • Bypass-UID PC — sin ban")
+                    try:
+                        await user.send(embed=embed_bypass)
+                    except discord.Forbidden:
+                        log.warning("No pude enviar DM bypass a %s — DM bloqueado", discord_id)
+                    try:
+                        canal_ventas = await _obtener_canal_ventas()
+                        if canal_ventas:
+                            await canal_ventas.send(
+                                f"🖥️ **BYPASS-UID — ENTREGA REQUERIDA** ⚠️ (sin stock automático)\n"
+                                f"Usuario: <@{discord_id}> (`{discord_id}`)\n"
+                                f"Pack: **{pack.nombre}** ({duration_bypass}) — ${pack.precio:,.0f} ARS\n"
+                                f"🎮 **FF ID (UID):** `{ff_id_bypass or 'NO ENCONTRADO'}`\n"
+                                f"Pago: **Mercado Pago** ✅\n"
+                                f"Presioná el botón para aprobar la ID y entregar la key.",
+                                view=BypassApproveView(),
+                            )
+                    except Exception:
+                        log.exception("No pude notificar bypass en ventas para %s", discord_id)
 
             else:
                 # Pack de proxy: generar key y entregar igual que pago manual
