@@ -9896,46 +9896,69 @@ async def configurar_roles_staff_cmd(interaction: discord.Interaction):
 
     resultados = []
 
-    # ── Crear o encontrar rol Vendedor ────────────────────────────────────────
-    vendedor_role = discord.utils.get(guild.roles, name="Vendedor")
-    if not vendedor_role:
-        vendedor_role = await guild.create_role(
-            name="Vendedor",
-            color=discord.Color.green(),
-            mentionable=True,
-            reason="Setup roles staff — Marke Panel",
-        )
-        resultados.append("✅ Rol **Vendedor** creado")
-    else:
-        resultados.append("ℹ️ Rol **Vendedor** ya existía — reutilizando")
+    # ── Helper interno: crear o editar rol con hoist ──────────────────────────
+    async def _upsert_role(nombre: str, color: discord.Color) -> tuple[discord.Role, bool]:
+        """Devuelve (role, creado). Si ya existe, actualiza color y hoist."""
+        role = discord.utils.get(guild.roles, name=nombre)
+        if not role:
+            role = await guild.create_role(
+                name=nombre,
+                color=color,
+                hoist=True,
+                mentionable=True,
+                reason="Setup jerarquía staff — Marke Panel",
+            )
+            return role, True
+        else:
+            await role.edit(color=color, hoist=True, mentionable=True,
+                            reason="Setup jerarquía staff — actualizar hoist")
+            return role, False
 
-    # ── Crear o encontrar rol Soporte ─────────────────────────────────────────
-    soporte_role = discord.utils.get(guild.roles, name="Soporte")
-    if not soporte_role:
-        soporte_role = await guild.create_role(
-            name="Soporte",
-            color=discord.Color.blue(),
-            mentionable=True,
-            reason="Setup roles staff — Marke Panel",
-        )
-        resultados.append("✅ Rol **Soporte** creado")
-    else:
-        resultados.append("ℹ️ Rol **Soporte** ya existía — reutilizando")
+    # ── 1. Owner ──────────────────────────────────────────────────────────────
+    owner_role, owner_creado = await _upsert_role("👑 Owner", discord.Color.gold())
+    resultados.append(f"{'✅ Creado' if owner_creado else '🔄 Actualizado'} **👑 Owner**")
+
+    # ── 2. Vendedor ───────────────────────────────────────────────────────────
+    vendedor_role, vend_creado = await _upsert_role("💼 Vendedor", discord.Color.green())
+    resultados.append(f"{'✅ Creado' if vend_creado else '🔄 Actualizado'} **💼 Vendedor**")
+
+    # ── 3. Soporte ────────────────────────────────────────────────────────────
+    soporte_role, sop_creado = await _upsert_role("🎧 Soporte", discord.Color.blue())
+    resultados.append(f"{'✅ Creado' if sop_creado else '🔄 Actualizado'} **🎧 Soporte**")
 
     # ── Guardar IDs en DB y globals ───────────────────────────────────────────
     VENDEDOR_ROLE_ID = vendedor_role.id
     SOPORTE_ROLE_ID  = soporte_role.id
     await asyncio.to_thread(database.set_config, "vendedor_role_id", str(vendedor_role.id))
     await asyncio.to_thread(database.set_config, "soporte_role_id",  str(soporte_role.id))
-    log.info("Roles staff configurados: Vendedor=%d Soporte=%d por %s", vendedor_role.id, soporte_role.id, interaction.user)
+    log.info(
+        "Roles staff configurados: Owner=%d Vendedor=%d Soporte=%d por %s",
+        owner_role.id, vendedor_role.id, soporte_role.id, interaction.user,
+    )
 
+    # ── Ordenar jerarquía: Owner > Vendedor > Soporte (bottom) ───────────────
+    # edit_role_positions necesita {role: posicion_relativa}
+    # Posición 1 = por encima de @everyone; mayor = más alto en la lista
+    try:
+        bot_pos = guild.me.top_role.position  # el bot debe estar por encima
+        # Dejar espacio bajo el bot para: Owner, Vendedor, Soporte
+        await guild.edit_role_positions({
+            owner_role:    max(1, bot_pos - 1),
+            vendedor_role: max(1, bot_pos - 2),
+            soporte_role:  max(1, bot_pos - 3),
+        })
+        resultados.append("📊 Jerarquía ordenada: **Owner > Vendedor > Soporte**")
+    except discord.Forbidden:
+        resultados.append("⚠️ Sin permisos para reordenar roles — hacelo manualmente")
+    except Exception as _e:
+        resultados.append(f"⚠️ No pude reordenar posiciones: {_e}")
+
+    # ── Aplicar permisos en canales ───────────────────────────────────────────
     _staff_roles = [vendedor_role, soporte_role]
     canales_actualizados = 0
     canales_error = 0
 
-    # ── Aplicar permisos en TODOS los canales del servidor ────────────────────
     for channel in guild.channels:
-        # Decidir si este canal aplica restricción o acceso al staff
         nombre = channel.name.lower()
         es_privado_admin = (
             "ventas" in nombre
@@ -9945,20 +9968,15 @@ async def configurar_roles_staff_cmd(interaction: discord.Interaction):
         try:
             for role in _staff_roles:
                 if es_privado_admin:
-                    # Denegar vista de canales de admin
                     await channel.set_permissions(
-                        role,
-                        view_channel=False,
+                        role, view_channel=False,
                         reason="Setup staff: sin acceso a canales admin",
                     )
                 else:
-                    # Para el resto: no sobreescribir (heredan del rol @everyone),
-                    # pero si ya tenían una restricción explícita, la quitamos
                     existing = channel.overwrites_for(role)
                     if existing.view_channel is False:
                         await channel.set_permissions(
-                            role,
-                            overwrite=None,
+                            role, overwrite=None,
                             reason="Setup staff: restaurar herencia en canal normal",
                         )
             canales_actualizados += 1
@@ -9970,17 +9988,22 @@ async def configurar_roles_staff_cmd(interaction: discord.Interaction):
     resultados.append(f"🔒 Canales actualizados: **{canales_actualizados}** (errores: {canales_error})")
 
     embed = discord.Embed(
-        title="✅ Roles de Staff configurados",
+        title="✅ Jerarquía de roles configurada",
         description="\n".join(resultados),
-        color=0x2ECC71,
+        color=0xF1C40F,
     )
     embed.add_field(
-        name="👔 Vendedor",
+        name="👑 Owner",
+        value=f"{owner_role.mention}\n🟡 Aparece en lista\n🔑 Control total",
+        inline=True,
+    )
+    embed.add_field(
+        name="💼 Vendedor",
         value=(
             f"{vendedor_role.mention}\n"
-            "✅ Ve y responde tickets\n"
-            "❌ No ve #ventas ni logs\n"
-            "❌ No puede usar `/gen`"
+            "🟢 Aparece en lista\n"
+            "✅ Ve tickets\n"
+            "❌ Sin acceso admin"
         ),
         inline=True,
     )
@@ -9988,13 +10011,13 @@ async def configurar_roles_staff_cmd(interaction: discord.Interaction):
         name="🎧 Soporte",
         value=(
             f"{soporte_role.mention}\n"
-            "✅ Ve y responde tickets\n"
-            "❌ No ve #ventas ni logs\n"
-            "❌ No puede usar `/gen`"
+            "🔵 Aparece en lista\n"
+            "✅ Ve tickets\n"
+            "❌ Sin acceso admin"
         ),
         inline=True,
     )
-    embed.set_footer(text="Marke Panel • Asignales el rol manualmente a los miembros desde Discord")
+    embed.set_footer(text="Marke Panel • Lista de miembros muestra la jerarquía — asigná roles desde Discord")
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
