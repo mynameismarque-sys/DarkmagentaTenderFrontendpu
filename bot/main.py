@@ -39,6 +39,8 @@ IS_PRODUCTION: bool = bool(os.environ.get("REPLIT_DEPLOYMENT"))
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GUILD_ID = os.environ.get("DISCORD_GUILD_ID")
 ADMIN_ROLE_ID = os.environ.get("ADMIN_ROLE_ID")
+VENDEDOR_ROLE_ID: int = 0   # Se carga de DB config al iniciar (vendedor_role_id)
+SOPORTE_ROLE_ID: int  = 0   # Se carga de DB config al iniciar (soporte_role_id)
 
 # ---------------------------------------------------------------------------
 # Binance Pay — configuración manual
@@ -246,6 +248,18 @@ def _generar_key_proxy() -> str:
     chars = string.ascii_uppercase + string.digits
     suffix = "".join(random.choices(chars, k=6))
     return f"MARKE{suffix}"
+
+
+def _tiene_rol_staff(interaction: discord.Interaction) -> bool:
+    """True si el usuario tiene el rol Vendedor o Soporte (staff no-admin)."""
+    if not isinstance(interaction.user, discord.Member):
+        return False
+    roles_ids = {r.id for r in interaction.user.roles}
+    if VENDEDOR_ROLE_ID and VENDEDOR_ROLE_ID in roles_ids:
+        return True
+    if SOPORTE_ROLE_ID and SOPORTE_ROLE_ID in roles_ids:
+        return True
+    return False
 
 
 def _puede_registrar(interaction: discord.Interaction) -> bool:
@@ -3527,6 +3541,14 @@ async def _abrir_ticket(guild: discord.Guild, member: discord.Member, motivo: st
                 )
         except ValueError:
             pass
+    # Vendedor y Soporte pueden ver y responder tickets
+    for _staff_id in (VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID):
+        if _staff_id:
+            _staff_role = guild.get_role(_staff_id)
+            if _staff_role:
+                overwrites[_staff_role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True, read_message_history=True
+                )
 
     nombre_canal = f"ticket-{num:04d}-{member.name[:12].lower().replace(' ', '-')}"
     canal_ticket = await guild.create_text_channel(
@@ -9857,6 +9879,125 @@ async def referido_vincular_cmd(
         await interaction.followup.send("❌ No se pudo registrar el vínculo. Intentá de nuevo.", ephemeral=True)
 
 
+@tree.command(
+    name="configurar-roles-staff",
+    description="(Admin) Crear o reconfigurar los roles Vendedor y Soporte con sus permisos",
+)
+async def configurar_roles_staff_cmd(interaction: discord.Interaction):
+    global VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    guild = interaction.guild
+    if not guild:
+        await interaction.followup.send("❌ Este comando solo funciona en un servidor.", ephemeral=True)
+        return
+
+    resultados = []
+
+    # ── Crear o encontrar rol Vendedor ────────────────────────────────────────
+    vendedor_role = discord.utils.get(guild.roles, name="Vendedor")
+    if not vendedor_role:
+        vendedor_role = await guild.create_role(
+            name="Vendedor",
+            color=discord.Color.green(),
+            mentionable=True,
+            reason="Setup roles staff — Marke Panel",
+        )
+        resultados.append("✅ Rol **Vendedor** creado")
+    else:
+        resultados.append("ℹ️ Rol **Vendedor** ya existía — reutilizando")
+
+    # ── Crear o encontrar rol Soporte ─────────────────────────────────────────
+    soporte_role = discord.utils.get(guild.roles, name="Soporte")
+    if not soporte_role:
+        soporte_role = await guild.create_role(
+            name="Soporte",
+            color=discord.Color.blue(),
+            mentionable=True,
+            reason="Setup roles staff — Marke Panel",
+        )
+        resultados.append("✅ Rol **Soporte** creado")
+    else:
+        resultados.append("ℹ️ Rol **Soporte** ya existía — reutilizando")
+
+    # ── Guardar IDs en DB y globals ───────────────────────────────────────────
+    VENDEDOR_ROLE_ID = vendedor_role.id
+    SOPORTE_ROLE_ID  = soporte_role.id
+    await asyncio.to_thread(database.set_config, "vendedor_role_id", str(vendedor_role.id))
+    await asyncio.to_thread(database.set_config, "soporte_role_id",  str(soporte_role.id))
+    log.info("Roles staff configurados: Vendedor=%d Soporte=%d por %s", vendedor_role.id, soporte_role.id, interaction.user)
+
+    _staff_roles = [vendedor_role, soporte_role]
+    canales_actualizados = 0
+    canales_error = 0
+
+    # ── Aplicar permisos en TODOS los canales del servidor ────────────────────
+    for channel in guild.channels:
+        # Decidir si este canal aplica restricción o acceso al staff
+        nombre = channel.name.lower()
+        es_privado_admin = (
+            "ventas" in nombre
+            or "logs" in nombre
+            or "registros" in nombre
+        )
+        try:
+            for role in _staff_roles:
+                if es_privado_admin:
+                    # Denegar vista de canales de admin
+                    await channel.set_permissions(
+                        role,
+                        view_channel=False,
+                        reason="Setup staff: sin acceso a canales admin",
+                    )
+                else:
+                    # Para el resto: no sobreescribir (heredan del rol @everyone),
+                    # pero si ya tenían una restricción explícita, la quitamos
+                    existing = channel.overwrites_for(role)
+                    if existing.view_channel is False:
+                        await channel.set_permissions(
+                            role,
+                            overwrite=None,
+                            reason="Setup staff: restaurar herencia en canal normal",
+                        )
+            canales_actualizados += 1
+        except discord.Forbidden:
+            canales_error += 1
+        except Exception:
+            canales_error += 1
+
+    resultados.append(f"🔒 Canales actualizados: **{canales_actualizados}** (errores: {canales_error})")
+
+    embed = discord.Embed(
+        title="✅ Roles de Staff configurados",
+        description="\n".join(resultados),
+        color=0x2ECC71,
+    )
+    embed.add_field(
+        name="👔 Vendedor",
+        value=(
+            f"{vendedor_role.mention}\n"
+            "✅ Ve y responde tickets\n"
+            "❌ No ve #ventas ni logs\n"
+            "❌ No puede usar `/gen`"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="🎧 Soporte",
+        value=(
+            f"{soporte_role.mention}\n"
+            "✅ Ve y responde tickets\n"
+            "❌ No ve #ventas ni logs\n"
+            "❌ No puede usar `/gen`"
+        ),
+        inline=True,
+    )
+    embed.set_footer(text="Marke Panel • Asignales el rol manualmente a los miembros desde Discord")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 async def _monitor_prod_session_and_close_gateway() -> None:
     """Dev: sale del proceso cuando prod toma la sesión de Telegram.
 
@@ -9882,8 +10023,19 @@ async def _monitor_prod_session_and_close_gateway() -> None:
 
 @client.event
 async def on_ready():
-    global MODO_AUTO_MP, _ARG_EMOJI_ID
+    global MODO_AUTO_MP, _ARG_EMOJI_ID, VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID
     MODO_AUTO_MP = database.get_config("MODO_AUTO_MP", "1") != "0"
+    try:
+        _vid = int(database.get_config("vendedor_role_id", "0") or "0")
+        _sid = int(database.get_config("soporte_role_id", "0") or "0")
+        VENDEDOR_ROLE_ID = _vid
+        SOPORTE_ROLE_ID  = _sid
+        if _vid:
+            log.info("Rol Vendedor cargado desde DB: id=%d", _vid)
+        if _sid:
+            log.info("Rol Soporte cargado desde DB: id=%d", _sid)
+    except Exception:
+        log.exception("Error cargando IDs de roles staff desde DB")
     log.info("Bot conectado como %s (id=%s)", client.user, client.user.id)
     log.info("MODO_AUTO_MP cargado desde DB: %s", MODO_AUTO_MP)
 
@@ -10167,7 +10319,7 @@ async def _obtener_canal_ventas() -> discord.TextChannel | None:
         _id_canal_ventas = ch.id
         return ch
 
-    # Crear si no existe — privado: solo Owner + rol Admin lo ven
+    # Crear si no existe — privado: solo Owner + rol Admin lo ven (Vendedor/Soporte NO)
     overwrites: dict = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=False, send_messages=False, read_message_history=False
@@ -10187,6 +10339,12 @@ async def _obtener_canal_ventas() -> discord.TextChannel | None:
                 )
         except (TypeError, ValueError):
             pass
+    # Denegar explícitamente al staff (Vendedor/Soporte) ver este canal
+    for _staff_id in (VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID):
+        if _staff_id:
+            _staff_role = guild.get_role(_staff_id)
+            if _staff_role:
+                overwrites[_staff_role] = discord.PermissionOverwrite(view_channel=False)
     ch = await guild.create_text_channel("💰・ventas", overwrites=overwrites)
     _id_canal_ventas = ch.id
     log.info("Canal #ventas creado (id=%s)", ch.id)
@@ -10278,7 +10436,7 @@ async def _obtener_canal_logs() -> discord.TextChannel | None:
             _id_canal_logs = ch.id
             return ch
 
-    # Crear si no existe — privado: solo bot + rol Admin
+    # Crear si no existe — privado: solo bot + rol Admin (Vendedor/Soporte NO)
     overwrites: dict = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=False, send_messages=False, read_message_history=False,
@@ -10298,6 +10456,12 @@ async def _obtener_canal_logs() -> discord.TextChannel | None:
                 )
         except (TypeError, ValueError):
             pass
+    # Denegar explícitamente al staff (Vendedor/Soporte) ver logs
+    for _staff_id in (VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID):
+        if _staff_id:
+            _staff_role = guild.get_role(_staff_id)
+            if _staff_role:
+                overwrites[_staff_role] = discord.PermissionOverwrite(view_channel=False)
 
     # Ubicar bajo la misma categoría que #ventas si existe
     categoria = None
