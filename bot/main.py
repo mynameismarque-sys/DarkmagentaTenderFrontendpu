@@ -1118,6 +1118,8 @@ async def resync_cmd(interaction: discord.Interaction):
 @tree.command(name="gen", description="(Admin) Generar una key en el bot de FF Proxy")
 @app_commands.describe(key="La key a generar", dias="Cantidad de días de acceso")
 async def gen_cmd(interaction: discord.Interaction, key: str, dias: int):
+    if not IS_PRODUCTION:
+        return  # dejar que el bot de producción maneje el comando
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     roles = getattr(interaction.user, "roles", [])
     tiene_rol_key = any(r.id == KEY_ALLOWED_ROLE_ID for r in roles)
@@ -1125,7 +1127,7 @@ async def gen_cmd(interaction: discord.Interaction, key: str, dias: int):
         await interaction.followup.send("No tenés permiso para usar este comando.", ephemeral=True)
         return
     try:
-        respuesta = await telegram_client.cmd_gen(key, dias)
+        respuesta = await asyncio.wait_for(telegram_client.cmd_gen(key, dias), timeout=90)
         log.info("🔑 KEY /gen — key=%s dias=%d admin=%s (%s)", key, dias, interaction.user, interaction.user.id)
         await interaction.followup.send(
             f"✅ **Respuesta del bot de FF Proxy:**\n```\n{respuesta}\n```",
@@ -1160,6 +1162,8 @@ KEY_ALLOWED_ROLE_ID = 1505803027188289679  # Rol con acceso a /key
 @tree.command(name="key", description="Activar tu key de FF Proxy con tu IP")
 @app_commands.describe(key="Tu key de acceso", ip="Tu IP pública")
 async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
+    if not IS_PRODUCTION:
+        return  # dejar que el bot de producción maneje el comando
     await _safe_defer(interaction, ephemeral=True, thinking=True)
     # Permitir: verificados, admins, o quien tenga el rol KEY_ALLOWED_ROLE_ID
     roles = getattr(interaction.user, "roles", [])
@@ -1195,7 +1199,7 @@ async def key_cmd(interaction: discord.Interaction, key: str, ip: str):
         return
 
     try:
-        respuesta = await telegram_client.cmd_key(key, ip_clean)
+        respuesta = await asyncio.wait_for(telegram_client.cmd_key(key, ip_clean), timeout=90)
         await interaction.followup.send(
             f"✅ **Tu key fue activada:**\n```\n{respuesta}\n```\n\n"
             "¡Muchísimas gracias por comprar en **Sensi Marke**! 🖤\n"
