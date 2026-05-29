@@ -312,8 +312,8 @@ def _make_client() -> TelegramClient:
         api_hash,
         proxy=proxy,
         auto_reconnect=True,
-        connection_retries=10,
-        retry_delay=3,
+        connection_retries=3,
+        retry_delay=2,
     )
 
 
@@ -435,6 +435,7 @@ async def _do_reconnect() -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _keepalive_loop() -> None:
+    global _prod_has_session, _next_dup_retry, _dev_permanently_blocked
     log.info("Telethon keepalive iniciado (check=%ds, ping=%ds).", CHECK_INTERVAL, PING_INTERVAL)
     last_ping  = asyncio.get_event_loop().time()
     auth_delay = 60
