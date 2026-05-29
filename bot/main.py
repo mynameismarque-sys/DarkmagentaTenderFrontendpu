@@ -9894,131 +9894,98 @@ async def configurar_roles_staff_cmd(interaction: discord.Interaction):
         await interaction.followup.send("❌ Este comando solo funciona en un servidor.", ephemeral=True)
         return
 
-    resultados = []
-
-    # ── Helper interno: crear o editar rol con hoist ──────────────────────────
+    # ── Helper: crear o editar rol con hoist ──────────────────────────────────
     async def _upsert_role(nombre: str, color: discord.Color) -> tuple[discord.Role, bool]:
-        """Devuelve (role, creado). Si ya existe, actualiza color y hoist."""
         role = discord.utils.get(guild.roles, name=nombre)
         if not role:
             role = await guild.create_role(
-                name=nombre,
-                color=color,
-                hoist=True,
-                mentionable=True,
+                name=nombre, color=color, hoist=True, mentionable=True,
                 reason="Setup jerarquía staff — Marke Panel",
             )
             return role, True
-        else:
-            await role.edit(color=color, hoist=True, mentionable=True,
-                            reason="Setup jerarquía staff — actualizar hoist")
-            return role, False
+        await role.edit(color=color, hoist=True, mentionable=True,
+                        reason="Setup jerarquía staff — actualizar hoist")
+        return role, False
 
-    # ── 1. Owner ──────────────────────────────────────────────────────────────
-    owner_role, owner_creado = await _upsert_role("👑 Owner", discord.Color.gold())
-    resultados.append(f"{'✅ Creado' if owner_creado else '🔄 Actualizado'} **👑 Owner**")
+    # ── Crear / actualizar los 3 roles (rápido: 3 API calls) ─────────────────
+    resultados = []
+    try:
+        owner_role,    owner_ok   = await _upsert_role("👑 Owner",    discord.Color.gold())
+        vendedor_role, vend_ok    = await _upsert_role("💼 Vendedor", discord.Color.green())
+        soporte_role,  sop_ok     = await _upsert_role("🎧 Soporte",  discord.Color.blue())
+    except Exception as _e:
+        await interaction.followup.send(f"❌ Error creando roles: {_e}", ephemeral=True)
+        return
 
-    # ── 2. Vendedor ───────────────────────────────────────────────────────────
-    vendedor_role, vend_creado = await _upsert_role("💼 Vendedor", discord.Color.green())
-    resultados.append(f"{'✅ Creado' if vend_creado else '🔄 Actualizado'} **💼 Vendedor**")
-
-    # ── 3. Soporte ────────────────────────────────────────────────────────────
-    soporte_role, sop_creado = await _upsert_role("🎧 Soporte", discord.Color.blue())
-    resultados.append(f"{'✅ Creado' if sop_creado else '🔄 Actualizado'} **🎧 Soporte**")
+    for rol, creado in ((owner_role, owner_ok), (vendedor_role, vend_ok), (soporte_role, sop_ok)):
+        resultados.append(f"{'✅ Creado' if creado else '🔄 Actualizado'} **{rol.name}**")
 
     # ── Guardar IDs en DB y globals ───────────────────────────────────────────
     VENDEDOR_ROLE_ID = vendedor_role.id
     SOPORTE_ROLE_ID  = soporte_role.id
-    await asyncio.to_thread(database.set_config, "vendedor_role_id", str(vendedor_role.id))
-    await asyncio.to_thread(database.set_config, "soporte_role_id",  str(soporte_role.id))
-    log.info(
-        "Roles staff configurados: Owner=%d Vendedor=%d Soporte=%d por %s",
-        owner_role.id, vendedor_role.id, soporte_role.id, interaction.user,
-    )
+    database.set_config("vendedor_role_id", str(vendedor_role.id))
+    database.set_config("soporte_role_id",  str(soporte_role.id))
+    log.info("Roles staff: Owner=%d Vendedor=%d Soporte=%d por %s",
+             owner_role.id, vendedor_role.id, soporte_role.id, interaction.user)
 
-    # ── Ordenar jerarquía: Owner > Vendedor > Soporte (bottom) ───────────────
-    # edit_role_positions necesita {role: posicion_relativa}
-    # Posición 1 = por encima de @everyone; mayor = más alto en la lista
+    # ── Jerarquía de posiciones (1 API call) ──────────────────────────────────
     try:
-        bot_pos = guild.me.top_role.position  # el bot debe estar por encima
-        # Dejar espacio bajo el bot para: Owner, Vendedor, Soporte
+        bot_pos = guild.me.top_role.position
         await guild.edit_role_positions({
             owner_role:    max(1, bot_pos - 1),
             vendedor_role: max(1, bot_pos - 2),
             soporte_role:  max(1, bot_pos - 3),
         })
-        resultados.append("📊 Jerarquía ordenada: **Owner > Vendedor > Soporte**")
+        resultados.append("📊 Jerarquía: **Owner > Vendedor > Soporte**")
     except discord.Forbidden:
-        resultados.append("⚠️ Sin permisos para reordenar roles — hacelo manualmente")
+        resultados.append("⚠️ Sin permisos para reordenar — hacelo manualmente")
     except Exception as _e:
-        resultados.append(f"⚠️ No pude reordenar posiciones: {_e}")
+        resultados.append(f"⚠️ Posiciones no ajustadas: {_e}")
 
-    # ── Aplicar permisos en canales ───────────────────────────────────────────
-    _staff_roles = [vendedor_role, soporte_role]
-    canales_actualizados = 0
-    canales_error = 0
-
-    for channel in guild.channels:
-        nombre = channel.name.lower()
-        es_privado_admin = (
-            "ventas" in nombre
-            or "logs" in nombre
-            or "registros" in nombre
-        )
-        try:
-            for role in _staff_roles:
-                if es_privado_admin:
-                    await channel.set_permissions(
-                        role, view_channel=False,
-                        reason="Setup staff: sin acceso a canales admin",
-                    )
-                else:
-                    existing = channel.overwrites_for(role)
-                    if existing.view_channel is False:
-                        await channel.set_permissions(
-                            role, overwrite=None,
-                            reason="Setup staff: restaurar herencia en canal normal",
-                        )
-            canales_actualizados += 1
-        except discord.Forbidden:
-            canales_error += 1
-        except Exception:
-            canales_error += 1
-
-    resultados.append(f"🔒 Canales actualizados: **{canales_actualizados}** (errores: {canales_error})")
-
+    # ── Responder INMEDIATAMENTE — los permisos de canales van en background ──
     embed = discord.Embed(
         title="✅ Jerarquía de roles configurada",
-        description="\n".join(resultados),
+        description="\n".join(resultados) + "\n\n⏳ Aplicando permisos en canales en segundo plano...",
         color=0xF1C40F,
     )
-    embed.add_field(
-        name="👑 Owner",
-        value=f"{owner_role.mention}\n🟡 Aparece en lista\n🔑 Control total",
-        inline=True,
-    )
-    embed.add_field(
-        name="💼 Vendedor",
-        value=(
-            f"{vendedor_role.mention}\n"
-            "🟢 Aparece en lista\n"
-            "✅ Ve tickets\n"
-            "❌ Sin acceso admin"
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="🎧 Soporte",
-        value=(
-            f"{soporte_role.mention}\n"
-            "🔵 Aparece en lista\n"
-            "✅ Ve tickets\n"
-            "❌ Sin acceso admin"
-        ),
-        inline=True,
-    )
-    embed.set_footer(text="Marke Panel • Lista de miembros muestra la jerarquía — asigná roles desde Discord")
+    embed.add_field(name="👑 Owner",    value=f"{owner_role.mention}\n🟡 Aparece en lista\n🔑 Control total", inline=True)
+    embed.add_field(name="💼 Vendedor", value=f"{vendedor_role.mention}\n🟢 Aparece en lista\n✅ Ve tickets\n❌ Sin acceso admin", inline=True)
+    embed.add_field(name="🎧 Soporte",  value=f"{soporte_role.mention}\n🔵 Aparece en lista\n✅ Ve tickets\n❌ Sin acceso admin", inline=True)
+    embed.set_footer(text="Marke Panel • Asigná roles desde Discord")
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+    # ── Aplicar permisos en canales en background (puede tardar, no bloquea) ──
+    async def _aplicar_permisos_staff():
+        _staff_roles = [vendedor_role, soporte_role]
+        ok = err = 0
+        for channel in guild.channels:
+            nombre = channel.name.lower()
+            es_privado = "ventas" in nombre or "logs" in nombre or "registros" in nombre
+            for role in _staff_roles:
+                try:
+                    if es_privado:
+                        await channel.set_permissions(role, view_channel=False,
+                                                       reason="Setup staff perms")
+                    else:
+                        ow = channel.overwrites_for(role)
+                        if ow.view_channel is False:
+                            await channel.set_permissions(role, overwrite=None,
+                                                           reason="Setup staff perms")
+                except Exception:
+                    err += 1
+                    continue
+            ok += 1
+            await asyncio.sleep(0.1)   # ceder el event loop entre canales
+        log.info("_aplicar_permisos_staff: %d canales ok, %d errores", ok, err)
+        try:
+            await interaction.user.send(
+                f"✅ **Permisos de canales aplicados.**\n"
+                f"Canales procesados: **{ok}** | Errores: **{err}**"
+            )
+        except Exception:
+            pass
+
+    asyncio.create_task(_aplicar_permisos_staff())
 
 
 async def _monitor_prod_session_and_close_gateway() -> None:
