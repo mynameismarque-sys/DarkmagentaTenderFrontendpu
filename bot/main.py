@@ -10015,6 +10015,207 @@ async def _monitor_prod_session_and_close_gateway() -> None:
         await asyncio.sleep(15)
 
 
+async def _setup_canal_metodos_pago() -> None:
+    """Crea/actualiza el canal 💳・metodos-de-pago con todos los métodos por país."""
+    await client.wait_until_ready()
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    canal: discord.TextChannel | None = None
+    for ch in guild.text_channels:
+        n = ch.name.lower().replace("・", "").replace("-", "")
+        if "metodospago" in n or "metodosdepago" in n or "pagos" in n and "💳" in ch.name:
+            canal = ch
+            break
+
+    if canal is None:
+        categoria = await _obtener_o_crear_categoria(guild, _CAT_INFORMACION)
+        try:
+            canal = await guild.create_text_channel(
+                "💳・metodos-de-pago",
+                category=categoria,
+                topic="Métodos de pago aceptados — Sensi Marke 💸",
+                reason="Setup automático — Marke Panel",
+            )
+            log.info("Canal #metodos-de-pago creado (id=%s)", canal.id)
+        except Exception:
+            log.exception("No pude crear #metodos-de-pago")
+            return
+
+    try:
+        bot_member = guild.get_member(client.user.id)
+        await canal.set_permissions(guild.default_role, view_channel=True, send_messages=False)
+        if bot_member:
+            await canal.set_permissions(bot_member, view_channel=True, send_messages=True,
+                                         manage_messages=True, embed_links=True)
+    except Exception:
+        log.exception("Error configurando permisos de #metodos-de-pago")
+
+    async for msg in canal.history(limit=20):
+        if msg.author == client.user and msg.embeds:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+    embed = discord.Embed(
+        title="💳 Métodos de Pago Aceptados",
+        description=(
+            "Aceptamos pagos desde **toda América Latina y el mundo**.\n"
+            "Contactá a un admin para coordinar tu método preferido.\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━"
+        ),
+        color=0x2ECC71,
+    )
+    embed.add_field(
+        name="🇦🇷 Pesos Argentinos (ARS)",
+        value="• Mercado Pago\n• Transferencia bancaria (CBU / Alias)",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇺🇸 Dólares (USD)",
+        value="• Binance Pay\n• USDT (TRC20 / BEP20)\n• PayPal",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇧🇷 Reales Brasileños (BRL)",
+        value="• PIX\n• Transferência bancária",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇨🇴 Pesos Colombianos (COP)",
+        value="• Nequi\n• Daviplata\n• Transferencia bancaria",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇨🇱 Pesos Chilenos (CLP)",
+        value="• Transferencia bancaria\n• Mercado Pago CL",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇲🇽 Pesos Mexicanos (MXN)",
+        value="• OXXO Pay\n• Transferencia SPEI\n• Mercado Pago MX",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇺🇾 Pesos Uruguayos (UYU)",
+        value="• Transferencia bancaria\n• Abitab / RedPagos",
+        inline=True,
+    )
+    embed.add_field(
+        name="🇧🇴 Bolivianos (BOB)",
+        value="• Transferencia bancaria\n• Tigo Money",
+        inline=True,
+    )
+    embed.add_field(
+        name="📌 Importante",
+        value=(
+            "Abrí un ticket en <#1298673302337544203> o contactá a un admin "
+            "para coordinar el pago en tu moneda.\n"
+            "El precio se convierte al tipo de cambio del día. 📈"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Marke Panel • Sensi Marke — Pagos seguros y rápidos 🔒")
+    await canal.send(embed=embed)
+    log.info("Embed de #metodos-de-pago posteado.")
+
+
+async def _setup_canal_reglas() -> None:
+    """Encuentra el canal #reglas y postea/actualiza las reglas en ES + EN + PT."""
+    await client.wait_until_ready()
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    canal: discord.TextChannel | None = None
+    for ch in guild.text_channels:
+        n = ch.name.lower().replace("・", "").replace("📋", "").replace(" ", "")
+        if n in ("reglas", "normas", "rules", "reglamento"):
+            canal = ch
+            break
+
+    if canal is None:
+        log.warning("_setup_canal_reglas: no encontré el canal #reglas.")
+        return
+
+    async for msg in canal.history(limit=30):
+        if msg.author == client.user and msg.embeds:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+    # ── Embed 1: Español ──────────────────────────────────────────────────────
+    embed_es = discord.Embed(
+        title="📋 Reglas del Servidor — Sensi Marke",
+        description="Leé y respetá estas reglas para mantener la comunidad sana. 🤝",
+        color=0x3498DB,
+    )
+    embed_es.add_field(
+        name="🇦🇷 Español",
+        value=(
+            "**1.** Respetá a todos los miembros. Sin insultos, acoso ni discriminación.\n"
+            "**2.** No spam, no publicidad externa sin permiso de un admin.\n"
+            "**3.** Usá cada canal para su función correspondiente.\n"
+            "**4.** Prohibido compartir links maliciosos, virus o estafas.\n"
+            "**5.** Las compras son a través del bot o un admin — no entre usuarios.\n"
+            "**6.** No pidas roles ni permisos que no te corresponden.\n"
+            "**7.** El incumplimiento resulta en **ban permanente** automático. 🚫"
+        ),
+        inline=False,
+    )
+    embed_es.set_footer(text="Marke Panel • Sensi Marke")
+    await canal.send(embed=embed_es)
+
+    # ── Embed 2: English ─────────────────────────────────────────────────────
+    embed_en = discord.Embed(
+        title="📋 Server Rules — Sensi Marke",
+        description="Read and follow these rules to keep the community healthy. 🤝",
+        color=0xE74C3C,
+    )
+    embed_en.add_field(
+        name="🇺🇸 English",
+        value=(
+            "**1.** Respect all members. No insults, harassment or discrimination.\n"
+            "**2.** No spam, no external advertising without admin permission.\n"
+            "**3.** Use each channel for its intended purpose.\n"
+            "**4.** Sharing malicious links, viruses or scams is strictly forbidden.\n"
+            "**5.** All purchases go through the bot or an admin — not between users.\n"
+            "**6.** Do not ask for roles or permissions that are not yours.\n"
+            "**7.** Breaking these rules results in an automatic **permanent ban**. 🚫"
+        ),
+        inline=False,
+    )
+    embed_en.set_footer(text="Marke Panel • Sensi Marke")
+    await canal.send(embed=embed_en)
+
+    # ── Embed 3: Português ────────────────────────────────────────────────────
+    embed_pt = discord.Embed(
+        title="📋 Regras do Servidor — Sensi Marke",
+        description="Leia e respeite estas regras para manter a comunidade saudável. 🤝",
+        color=0x2ECC71,
+    )
+    embed_pt.add_field(
+        name="🇧🇷 Português",
+        value=(
+            "**1.** Respeite todos os membros. Sem insultos, assédio ou discriminação.\n"
+            "**2.** Sem spam, sem publicidade externa sem permissão de um admin.\n"
+            "**3.** Use cada canal para a sua função correspondente.\n"
+            "**4.** É proibido compartilhar links maliciosos, vírus ou golpes.\n"
+            "**5.** As compras são feitas pelo bot ou um admin — não entre usuários.\n"
+            "**6.** Não peça cargos ou permissões que não lhe pertencem.\n"
+            "**7.** O descumprimento resulta em **banimento permanente** automático. 🚫"
+        ),
+        inline=False,
+    )
+    embed_pt.set_footer(text="Marke Panel • Sensi Marke")
+    await canal.send(embed=embed_pt)
+
+    log.info("Reglas (ES/EN/PT) posteadas en #%s.", canal.name)
+
+
 @client.event
 async def on_ready():
     global MODO_AUTO_MP, _ARG_EMOJI_ID, VENDEDOR_ROLE_ID, SOPORTE_ROLE_ID
@@ -10101,6 +10302,8 @@ async def on_ready():
     asyncio.create_task(_setup_canal_flourite())
     asyncio.create_task(_setup_canal_diamantes())
     asyncio.create_task(_setup_canal_chat())
+    asyncio.create_task(_setup_canal_metodos_pago())
+    asyncio.create_task(_setup_canal_reglas())
     asyncio.create_task(_reorganizar_categorias())
     asyncio.create_task(_configurar_canal_anuncios())
     asyncio.create_task(_configurar_canal_general())
@@ -10973,6 +11176,32 @@ def main() -> None:
         else:
             # Dev sin Telegram API: salida limpia intencional
             break
+
+
+@tree.command(
+    name="actualizar-metodos-pago",
+    description="(Admin) Refresca el canal #metodos-de-pago con el embed actualizado",
+)
+async def actualizar_metodos_pago_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    await _setup_canal_metodos_pago()
+    await interaction.followup.send("✅ Canal #metodos-de-pago actualizado.", ephemeral=True)
+
+
+@tree.command(
+    name="actualizar-reglas",
+    description="(Admin) Refresca el canal #reglas con las versiones ES / EN / PT",
+)
+async def actualizar_reglas_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    await _setup_canal_reglas()
+    await interaction.followup.send("✅ Reglas (ES / EN / PT) actualizadas.", ephemeral=True)
 
 
 if __name__ == "__main__":
