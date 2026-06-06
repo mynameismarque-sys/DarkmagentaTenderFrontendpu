@@ -10080,32 +10080,32 @@ async def _setup_canal_metodos_pago() -> None:
     )
     embed.add_field(
         name="🇧🇷 Reales Brasileños (BRL)",
-        value="• PIX\n• Transferência bancária",
+        value="• PIX",
         inline=True,
     )
     embed.add_field(
         name="🇨🇴 Pesos Colombianos (COP)",
-        value="• Nequi\n• Daviplata\n• Transferencia bancaria",
+        value="• Link de pago",
         inline=True,
     )
     embed.add_field(
         name="🇨🇱 Pesos Chilenos (CLP)",
-        value="• Transferencia bancaria\n• Mercado Pago CL",
+        value="• Link de pago",
         inline=True,
     )
     embed.add_field(
         name="🇲🇽 Pesos Mexicanos (MXN)",
-        value="• OXXO Pay\n• Transferencia SPEI\n• Mercado Pago MX",
+        value="• Link de pago",
         inline=True,
     )
     embed.add_field(
         name="🇺🇾 Pesos Uruguayos (UYU)",
-        value="• Transferencia bancaria\n• Abitab / RedPagos",
+        value="• Prex",
         inline=True,
     )
     embed.add_field(
         name="🇧🇴 Bolivianos (BOB)",
-        value="• Transferencia bancaria\n• Tigo Money",
+        value="• Link de pago",
         inline=True,
     )
     embed.add_field(
