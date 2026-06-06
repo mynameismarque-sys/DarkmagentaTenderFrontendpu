@@ -524,6 +524,29 @@ def count_bypass_keys() -> dict[str, int]:
     return result
 
 
+def return_bypass_key(key_value: str) -> None:
+    """Devuelve una key al stock (marca used=0) — usar cuando el DM falla y no se entregó."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE bypass_keys SET used = 0, discord_id = NULL, used_at = NULL "
+            "WHERE key_value = ? AND used = 1",
+            (key_value,),
+        )
+        conn.commit()
+
+
+def get_bypass_key_history(limit: int = 20) -> list[dict]:
+    """Retorna las últimas `limit` keys usadas (más recientes primero)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT key_value, duration, discord_id, used_at, created_at "
+            "FROM bypass_keys WHERE used = 1 "
+            "ORDER BY used_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def clear_bypass_keys(duration: str) -> int:
     """Elimina todas las keys NO usadas para la duración dada. Retorna cuántas se borraron."""
     duration = duration.strip().lower()

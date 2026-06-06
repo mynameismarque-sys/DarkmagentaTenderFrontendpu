@@ -7584,11 +7584,15 @@ async def _entregar_bypass_key_auto(
         dm_ok = True
         log.info("bypass auto-entrega: key=%s dur=%s user=%s op=%s", key, duration, discord_id, op_id)
     except discord.Forbidden:
-        log.warning("bypass auto-entrega: DM bloqueado para %s — key=%s", discord_id, key)
+        log.warning("bypass auto-entrega: DM bloqueado para %s — devolviendo key=%s al stock", discord_id, key)
+        await asyncio.to_thread(database.return_bypass_key, key)
+        dm_ok = False
     except Exception:
-        log.exception("bypass auto-entrega: error DM para %s — key=%s", discord_id, key)
+        log.exception("bypass auto-entrega: error DM para %s — devolviendo key=%s al stock", discord_id, key)
+        await asyncio.to_thread(database.return_bypass_key, key)
+        dm_ok = False
 
-    # Notificar en #ventas que la key fue entregada automáticamente
+    # Notificar en #ventas
     try:
         canal_ventas = await _obtener_canal_ventas()
         if canal_ventas:
@@ -7601,14 +7605,16 @@ async def _entregar_bypass_key_auto(
                 )
             else:
                 await canal_ventas.send(
-                    f"🖥️ **BYPASS-UID — KEY GENERADA (DM fallido)** ⚠️\n"
+                    f"🖥️ **BYPASS-UID — DM BLOQUEADO** ⚠️\n"
                     f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
-                    f"🔑 Key: `{key}` ({duration}) — **enviársela manualmente**."
+                    f"La key fue **devuelta al stock** (el usuario tiene los DMs cerrados).\n"
+                    f"Abrí un ticket con el usuario para entregarla manualmente.",
+                    view=BypassApproveView(),
                 )
     except Exception:
         log.exception("bypass auto-entrega: error notificando en ventas para %s", discord_id)
 
-    return True
+    return dm_ok
 
 
 class BypassApproveView(_SafeViewMixin, discord.ui.View):
@@ -9753,6 +9759,45 @@ async def bypass_keys_limpiar_cmd(
         ephemeral=True,
     )
     log.info("bypass-keys-limpiar: %d keys (%s) eliminadas por %s", borradas, duracion.value, interaction.user)
+
+
+@tree.command(
+    name="bypass-keys-historial",
+    description="(Admin) Ver el historial de las últimas keys de Bypass-UID entregadas",
+)
+async def bypass_keys_historial_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    historial = await asyncio.to_thread(database.get_bypass_key_history, 15)
+    stock = await asyncio.to_thread(database.count_bypass_keys)
+    if not historial:
+        await interaction.followup.send(
+            "📭 No hay keys usadas en el historial aún.\n\n"
+            f"📦 **Stock disponible:** 1d=`{stock['1d']}` | 7d=`{stock['7d']}` | 30d=`{stock['30d']}`",
+            ephemeral=True,
+        )
+        return
+    lineas = []
+    dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}
+    for h in historial:
+        uid = f"<@{h['discord_id']}>" if h["discord_id"] else "—"
+        fecha = (h["used_at"] or "")[:16].replace("T", " ")
+        dur = dur_label.get(h["duration"], h["duration"])
+        lineas.append(f"• `{h['key_value'][:20]}…` | {dur} | {uid} | {fecha}")
+    embed = discord.Embed(
+        title="📋 Historial de Keys — Bypass-UID (últimas 15)",
+        description="\n".join(lineas),
+        color=0x95A5A6,
+    )
+    embed.add_field(
+        name="📦 Stock actual",
+        value=f"🖥️ 1 Día — `{stock['1d']}` keys\n🖥️ 7 Días — `{stock['7d']}` keys\n🖥️ 30 Días — `{stock['30d']}` keys",
+        inline=False,
+    )
+    embed.set_footer(text="Marke Panel • Solo visible para admins")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @tree.command(
