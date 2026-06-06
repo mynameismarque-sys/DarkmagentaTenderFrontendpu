@@ -10108,10 +10108,15 @@ async def _setup_canal_metodos_pago() -> None:
         value="• Link de pago",
         inline=True,
     )
+    ticket_ch = discord.utils.find(
+        lambda c: "ticket" in c.name.lower() or "crear" in c.name.lower(),
+        guild.text_channels,
+    )
+    ticket_mention = ticket_ch.mention if ticket_ch else "#crear-ticket"
     embed.add_field(
         name="📌 Importante",
         value=(
-            "Abrí un ticket en <#1298673302337544203> o contactá a un admin "
+            f"Abrí un ticket en {ticket_mention} o contactá a un admin "
             "para coordinar el pago en tu moneda.\n"
             "El precio se convierte al tipo de cambio del día. 📈"
         ),
