@@ -1,4 +1,5 @@
 """SQLite database para tracking de créditos por usuario de Discord."""
+import os
 import sqlite3
 import threading
 import uuid as _uuid
@@ -469,24 +470,62 @@ def get_bypass_order_ff_id(discord_id: str, pack_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bypass keys stock
+# Bypass keys stock — almacenado en PostgreSQL para persistir entre deployments
 # ---------------------------------------------------------------------------
+
+import psycopg2
+import psycopg2.extras
+
+_PG_URL = os.environ.get("DATABASE_URL", "")
+_pg_lock = threading.Lock()
+
+
+@contextmanager
+def _pg_connect():
+    conn = psycopg2.connect(_PG_URL)
+    conn.autocommit = False
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def init_pg_bypass_keys() -> None:
+    """Crea la tabla bypass_keys en PostgreSQL si no existe."""
+    with _pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bypass_keys_pg (
+                    id         SERIAL PRIMARY KEY,
+                    key_value  TEXT NOT NULL,
+                    duration   TEXT NOT NULL,
+                    used       BOOLEAN NOT NULL DEFAULT FALSE,
+                    discord_id TEXT,
+                    used_at    TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
 
 def add_bypass_keys(keys: list[str], duration: str) -> int:
     """Agrega una lista de keys al stock para la duración dada. Retorna cuántas se agregaron."""
     duration = duration.strip().lower()
     added = 0
-    with _lock, _connect() as conn:
-        for k in keys:
-            k = k.strip()
-            if not k:
-                continue
-            conn.execute(
-                "INSERT INTO bypass_keys (key_value, duration) VALUES (?, ?)",
-                (k, duration),
-            )
-            added += 1
-        conn.commit()
+    with _pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            for k in keys:
+                k = k.strip()
+                if not k:
+                    continue
+                cur.execute(
+                    "INSERT INTO bypass_keys_pg (key_value, duration) VALUES (%s, %s)",
+                    (k, duration),
+                )
+                added += 1
     return added
 
 
@@ -494,69 +533,75 @@ def pop_bypass_key(duration: str, discord_id: str = "") -> str:
     """Obtiene y marca como usada la key disponible más antigua para esa duración.
     Retorna la key o '' si no hay stock."""
     duration = duration.strip().lower()
-    with _lock, _connect() as conn:
-        row = conn.execute(
-            "SELECT id, key_value FROM bypass_keys "
-            "WHERE duration = ? AND used = 0 ORDER BY created_at ASC LIMIT 1",
-            (duration,),
-        ).fetchone()
-        if not row:
-            return ""
-        conn.execute(
-            "UPDATE bypass_keys SET used = 1, discord_id = ?, used_at = CURRENT_TIMESTAMP "
-            "WHERE id = ?",
-            (str(discord_id) or None, row["id"]),
-        )
-        conn.commit()
-        return row["key_value"]
+    with _pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, key_value FROM bypass_keys_pg "
+                "WHERE duration = %s AND used = FALSE "
+                "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+                (duration,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return ""
+            cur.execute(
+                "UPDATE bypass_keys_pg SET used = TRUE, discord_id = %s, used_at = NOW() "
+                "WHERE id = %s",
+                (str(discord_id) or None, row[0]),
+            )
+            return row[1]
 
 
 def count_bypass_keys() -> dict[str, int]:
     """Retorna el conteo de keys disponibles por duración: {'1d': N, '7d': N, '30d': N}."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT duration, COUNT(*) as cnt FROM bypass_keys "
-            "WHERE used = 0 GROUP BY duration"
-        ).fetchall()
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT duration, COUNT(*) FROM bypass_keys_pg "
+                "WHERE used = FALSE GROUP BY duration"
+            )
+            rows = cur.fetchall()
     result = {"1d": 0, "7d": 0, "30d": 0}
-    for r in rows:
-        result[r["duration"]] = r["cnt"]
+    for duration, cnt in rows:
+        result[duration] = cnt
     return result
 
 
 def return_bypass_key(key_value: str) -> None:
-    """Devuelve una key al stock (marca used=0) — usar cuando el DM falla y no se entregó."""
-    with _lock, _connect() as conn:
-        conn.execute(
-            "UPDATE bypass_keys SET used = 0, discord_id = NULL, used_at = NULL "
-            "WHERE key_value = ? AND used = 1",
-            (key_value,),
-        )
-        conn.commit()
+    """Devuelve una key al stock (marca used=FALSE) — usar cuando el DM falla."""
+    with _pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE bypass_keys_pg SET used = FALSE, discord_id = NULL, used_at = NULL "
+                "WHERE key_value = %s AND used = TRUE",
+                (key_value,),
+            )
 
 
 def get_bypass_key_history(limit: int = 20) -> list[dict]:
     """Retorna las últimas `limit` keys usadas (más recientes primero)."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT key_value, duration, discord_id, used_at, created_at "
-            "FROM bypass_keys WHERE used = 1 "
-            "ORDER BY used_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with _pg_connect() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT key_value, duration, discord_id, "
+                "used_at::text AS used_at, created_at::text AS created_at "
+                "FROM bypass_keys_pg WHERE used = TRUE "
+                "ORDER BY used_at DESC LIMIT %s",
+                (limit,),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
 
 def clear_bypass_keys(duration: str) -> int:
     """Elimina todas las keys NO usadas para la duración dada. Retorna cuántas se borraron."""
     duration = duration.strip().lower()
-    with _lock, _connect() as conn:
-        cur = conn.execute(
-            "DELETE FROM bypass_keys WHERE duration = ? AND used = 0",
-            (duration,),
-        )
-        conn.commit()
-        return cur.rowcount
+    with _pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM bypass_keys_pg WHERE duration = %s AND used = FALSE",
+                (duration,),
+            )
+            return cur.rowcount
 
 
 def payment_exists(payment_id: str) -> bool:

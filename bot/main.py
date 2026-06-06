@@ -11143,6 +11143,7 @@ def main() -> None:
         log.warning("Falta MP_ACCESS_TOKEN: /comprar fallará hasta cargarlo.")
 
     database.init_db()
+    database.init_pg_bypass_keys()
 
     flask_app = webhook_server.create_app(_notificar_pago, _whatsapp_a_discord)
     t = threading.Thread(
