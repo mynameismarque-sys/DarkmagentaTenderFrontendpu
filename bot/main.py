@@ -8066,36 +8066,18 @@ class MonitePackView(_SafeViewMixin, discord.ui.View):
 
 
 class MoniteCanalView(_SafeViewMixin, discord.ui.View):
-    """Vista persistente del canal Panel Monite con botones de plan."""
+    """Vista persistente del canal Panel Monite: selector de plan + botón revendedor."""
 
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(MonitePackSelect())
 
-    async def _abrir_seleccion(self, interaction: discord.Interaction):
-        await _safe_defer(interaction, ephemeral=True, thinking=True)
-        embed = discord.Embed(
-            title="📊 Panel Monite — Elegí tu plan",
-            description=(
-                "Seleccioná la duración del Panel Monite que querés comprar.\n"
-                "La key se entrega **automáticamente** por DM al confirmar el pago. 🚀"
-            ),
-            color=0xE67E22,
-        )
-        await interaction.followup.send(embed=embed, view=MonitePackView(), ephemeral=True)
-
-    @discord.ui.button(label="⏱ 1 Día — $3.000", style=discord.ButtonStyle.primary, custom_id="monite_comprar_1d", row=0)
-    async def btn_1d(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._abrir_seleccion(interaction)
-
-    @discord.ui.button(label="📅 7 Días — $8.000", style=discord.ButtonStyle.primary, custom_id="monite_comprar_7d", row=0)
-    async def btn_7d(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._abrir_seleccion(interaction)
-
-    @discord.ui.button(label="🗓️ 30 Días — $18.000", style=discord.ButtonStyle.success, custom_id="monite_comprar_30d", row=0)
-    async def btn_30d(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._abrir_seleccion(interaction)
-
-    @discord.ui.button(label="🤝 Plan Revendedor", style=discord.ButtonStyle.secondary, custom_id="monite_revendedor", row=1)
+    @discord.ui.button(
+        label="🤝 Plan Revendedor",
+        style=discord.ButtonStyle.secondary,
+        custom_id="monite_revendedor",
+        row=1,
+    )
     async def btn_revendedor(self, interaction: discord.Interaction, button: discord.ui.Button):
         ticket_ch = discord.utils.find(
             lambda c: "ticket" in c.name.lower() or "crear" in c.name.lower(),
@@ -8584,7 +8566,7 @@ async def _setup_canal_monite() -> None:
     except Exception:
         log.exception("Error configurando permisos de #panel-monite")
 
-    _MONITE_PANEL_VER = "monite_v1"
+    _MONITE_PANEL_VER = "monite_v2"
 
     # 6. Postear embed — solo si no existe el embed actual
     embed_encontrado = False
@@ -8632,7 +8614,7 @@ async def _setup_canal_monite() -> None:
                 f"{wa_field}\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "**¿Cómo comprar?**\n"
-                "1️⃣ Presioná el botón de tu plan.\n"
+                "1️⃣ Usá el selector de abajo y elegí la duración.\n"
                 "2️⃣ Elegí tu método de pago.\n"
                 "3️⃣ Recibís la key de activación por DM. 📩\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━"
