@@ -604,6 +604,116 @@ def clear_bypass_keys(duration: str) -> int:
             return cur.rowcount
 
 
+# ---------------------------------------------------------------------------
+# Panel Monite keys — PostgreSQL (persiste entre deployments)
+# ---------------------------------------------------------------------------
+
+_monite_pg_lock = threading.Lock()
+
+
+def init_pg_monite_keys() -> None:
+    """Crea la tabla monite_keys_pg en PostgreSQL si no existe."""
+    with _monite_pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS monite_keys_pg (
+                    id         SERIAL PRIMARY KEY,
+                    key_value  TEXT NOT NULL,
+                    duration   TEXT NOT NULL,
+                    used       BOOLEAN NOT NULL DEFAULT FALSE,
+                    discord_id TEXT,
+                    used_at    TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
+
+def add_monite_keys(keys: list[str], duration: str) -> int:
+    duration = duration.strip().lower()
+    added = 0
+    with _monite_pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            for k in keys:
+                k = k.strip()
+                if not k:
+                    continue
+                cur.execute(
+                    "INSERT INTO monite_keys_pg (key_value, duration) VALUES (%s, %s)",
+                    (k, duration),
+                )
+                added += 1
+    return added
+
+
+def pop_monite_key(duration: str, discord_id: str = "") -> str:
+    duration = duration.strip().lower()
+    with _monite_pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, key_value FROM monite_keys_pg "
+                "WHERE duration = %s AND used = FALSE "
+                "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+                (duration,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return ""
+            cur.execute(
+                "UPDATE monite_keys_pg SET used = TRUE, discord_id = %s, used_at = NOW() "
+                "WHERE id = %s",
+                (str(discord_id) or None, row[0]),
+            )
+            return row[1]
+
+
+def count_monite_keys() -> dict[str, int]:
+    with _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT duration, COUNT(*) FROM monite_keys_pg "
+                "WHERE used = FALSE GROUP BY duration"
+            )
+            rows = cur.fetchall()
+    result = {"1d": 0, "7d": 0, "30d": 0}
+    for duration, cnt in rows:
+        result[duration] = cnt
+    return result
+
+
+def return_monite_key(key_value: str) -> None:
+    with _monite_pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE monite_keys_pg SET used = FALSE, discord_id = NULL, used_at = NULL "
+                "WHERE key_value = %s AND used = TRUE",
+                (key_value,),
+            )
+
+
+def get_monite_key_history(limit: int = 20) -> list[dict]:
+    with _pg_connect() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT key_value, duration, discord_id, "
+                "used_at::text AS used_at, created_at::text AS created_at "
+                "FROM monite_keys_pg WHERE used = TRUE "
+                "ORDER BY used_at DESC LIMIT %s",
+                (limit,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def clear_monite_keys(duration: str) -> int:
+    duration = duration.strip().lower()
+    with _monite_pg_lock, _pg_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM monite_keys_pg WHERE duration = %s AND used = FALSE",
+                (duration,),
+            )
+            return cur.rowcount
+
+
 def payment_exists(payment_id: str) -> bool:
     with _connect() as conn:
         row = conn.execute(

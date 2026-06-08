@@ -43,6 +43,10 @@ PACKS: dict[str, Pack] = {
     "bypass_1d":  Pack(id="bypass_1d",  nombre="1 Día",   precio=2500.0,  creditos=1,  categoria="bypass"),
     "bypass_7d":  Pack(id="bypass_7d",  nombre="7 Días",  precio=7000.0,  creditos=7,  categoria="bypass"),
     "bypass_30d": Pack(id="bypass_30d", nombre="30 Días", precio=14000.0, creditos=30, categoria="bypass"),
+    # ── Panel Monite ─────────────────────────────────────────────────────────
+    "monite_1d":  Pack(id="monite_1d",  nombre="1 Día",   precio=3000.0,  creditos=1,  categoria="monite"),
+    "monite_7d":  Pack(id="monite_7d",  nombre="7 Días",  precio=8000.0,  creditos=7,  categoria="monite"),
+    "monite_30d": Pack(id="monite_30d", nombre="30 Días", precio=18000.0, creditos=30, categoria="monite"),
 }
 
 

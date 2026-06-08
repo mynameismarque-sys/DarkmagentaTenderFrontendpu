@@ -2745,6 +2745,9 @@ async def _acreditar_pago_aprobado(
         # Bypass-UID → entrega manual, solo registrar el pago
         nuevo_total = 0
         tipo_credito = "bypass"
+    elif pack.categoria == "monite":
+        nuevo_total = 0
+        tipo_credito = "monite"
     else:
         # Proxy → generar key y enviar por DM (sin créditos)
         nuevo_total = 0
@@ -2873,6 +2876,43 @@ async def _acreditar_pago_aprobado(
                         )
                 except Exception:
                     log.exception("No pude notificar bypass en ventas para op=%s", op_id)
+        elif pack.categoria == "monite":
+            dias_mn    = int(pack.creditos)
+            duration_mn = f"{dias_mn}d"
+            metodo_mn = "Naranja X" if op_id.startswith(("MNX-",)) else "Binance"
+            auto_ok_mn = await _entregar_monite_key_auto(
+                user, discord_id, duration_mn, pack.nombre, op_id, metodo_mn,
+            )
+            if not auto_ok_mn:
+                try:
+                    await user.send(
+                        embed=discord.Embed(
+                            title="✅ ¡Pago aprobado! — Panel Monite",
+                            description=(
+                                f"Tu operación `#{op_id}` fue confirmada.\n\n"
+                                f"⏱ **Duración:** {dias_mn} día{'s' if dias_mn != 1 else ''}\n\n"
+                                "Tu key de Panel Monite está siendo preparada. "
+                                "Te la enviamos por este chat en breve. 📩\n\n"
+                                "¡Gracias por tu compra en **Sensi Marke**! 📊"
+                            ),
+                            color=0xE67E22,
+                        )
+                    )
+                except Exception:
+                    pass
+                try:
+                    canal_ventas = await _obtener_canal_ventas()
+                    if canal_ventas:
+                        await canal_ventas.send(
+                            f"📊 **PANEL MONITE — ENTREGA REQUERIDA** ⚠️ (sin stock automático)\n"
+                            f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                            f"Pack: **{pack.nombre}** ({duration_mn}) — ${pack.precio:,.0f} ARS\n"
+                            f"Pago: **{metodo_mn}** ✅\n"
+                            f"Presioná el botón para entregar la key.",
+                            view=MoniteApproveView(),
+                        )
+                except Exception:
+                    log.exception("No pude notificar monite en ventas para op=%s", op_id)
         else:
             # Proxy → enviar key por DM
             dias_proxy = int(pack.creditos)
@@ -7714,6 +7754,362 @@ class BypassApproveView(_SafeViewMixin, discord.ui.View):
         )
 
 
+# ===========================================================================
+# PANEL MONITE
+# ===========================================================================
+
+_MONITE_TUTORIAL_URL = "https://youtu.be/KMBgqMsa98Q?si=2r0aqm3Z3Zk0bZyS"
+_MONITE_CERT_URL     = "https://d1yei2z3i6k35z.cloudfront.net/12011129/6a11ed7c39f438.33446416_signed_applejr.net.mobileconfig"
+
+
+async def _entregar_monite_key_auto(
+    user: discord.User,
+    discord_id: str,
+    duration: str,
+    pack_nombre: str,
+    op_id: str,
+    metodo: str,
+) -> bool:
+    """Intenta entregar automáticamente una key de Panel Monite desde el stock PG.
+    Devuelve True si se entregó exitosamente, False si no hay stock."""
+    dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}.get(duration, duration)
+    key = await asyncio.to_thread(database.pop_monite_key, duration, discord_id)
+    if not key:
+        return False
+
+    wa_url = database.get_config("monite_wa_url", "")
+    wa_line = f"\n📱 **Grupo WhatsApp referencias:** {wa_url}" if wa_url else ""
+
+    embed_key = discord.Embed(
+        title="✅ ¡Tu Panel Monite está listo!",
+        description=(
+            f"⏱ **Plan:** {dur_label}\n\n"
+            f"🔑 **Tu Key de Panel Monite:**\n"
+            f"```\n{key}\n```\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 **Certificado (instalación):** [Descargar]({_MONITE_CERT_URL})\n"
+            f"🎬 **Tutorial de activación:** [Ver en YouTube]({_MONITE_TUTORIAL_URL})"
+            f"{wa_line}\n\n"
+            "¡Cualquier duda contactá a un admin! 🛡️"
+        ),
+        color=0xE67E22,
+    )
+    embed_key.set_footer(text="Marke Panel • Panel Monite — Free Fire")
+    dm_ok = False
+    try:
+        await user.send(embed=embed_key)
+        dm_ok = True
+        log.info("monite auto-entrega: key=%s dur=%s user=%s op=%s", key, duration, discord_id, op_id)
+    except discord.Forbidden:
+        log.warning("monite auto-entrega: DM bloqueado %s — devolviendo key al stock", discord_id)
+        await asyncio.to_thread(database.return_monite_key, key)
+        dm_ok = False
+    except Exception:
+        log.exception("monite auto-entrega: error DM %s — devolviendo key al stock", discord_id)
+        await asyncio.to_thread(database.return_monite_key, key)
+        dm_ok = False
+
+    try:
+        canal_ventas = await _obtener_canal_ventas()
+        if canal_ventas:
+            if dm_ok:
+                await canal_ventas.send(
+                    f"📊 **PANEL MONITE — KEY ENTREGADA AUTOMÁTICAMENTE** ✅\n"
+                    f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                    f"Pack: **{pack_nombre}** ({duration}) | Pago: **{metodo}** ✅\n"
+                    f"🔑 Key: ||`{key}`||"
+                )
+            else:
+                await canal_ventas.send(
+                    f"📊 **PANEL MONITE — DM BLOQUEADO** ⚠️\n"
+                    f"Usuario: <@{discord_id}> | Op: `{op_id}`\n"
+                    f"La key fue **devuelta al stock** (DMs cerrados).\n"
+                    f"Abrí un ticket con el usuario para entregarla manualmente.",
+                    view=MoniteApproveView(),
+                )
+    except Exception:
+        log.exception("monite auto-entrega: error notificando en ventas para %s", discord_id)
+    return dm_ok
+
+
+class MoniteApproveView(_SafeViewMixin, discord.ui.View):
+    """Botón persistente para que el admin entregue una key de Monite manualmente."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="✅ Entregar Key Monite",
+        style=discord.ButtonStyle.success,
+        custom_id="monite_entregar_key",
+    )
+    async def btn_entregar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        import re as _re
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+        msg = interaction.message
+        content = msg.content if msg else ""
+        m_user = _re.search(r"<@(\d+)>", content)
+        if not m_user:
+            await interaction.followup.send("❌ No encontré al usuario en el mensaje.", ephemeral=True)
+            return
+        discord_id = m_user.group(1)
+        m_dur = _re.search(r"\((\d+)d\)", content)
+        duration = f"{m_dur.group(1)}d" if m_dur else "1d"
+
+        key = await asyncio.to_thread(database.pop_monite_key, duration, discord_id)
+        if not key:
+            stock = await asyncio.to_thread(database.count_monite_keys)
+            await interaction.followup.send(
+                f"❌ **Sin stock de keys de {duration}.**\n"
+                f"Stock: 1d={stock['1d']} | 7d={stock['7d']} | 30d={stock['30d']}\n"
+                f"Cargá más con `/monite-keys-cargar`.",
+                ephemeral=True,
+            )
+            return
+
+        wa_url = database.get_config("monite_wa_url", "")
+        wa_line = f"\n📱 **Grupo WhatsApp referencias:** {wa_url}" if wa_url else ""
+        try:
+            user = await client.fetch_user(int(discord_id))
+            dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}.get(duration, duration)
+            embed_key = discord.Embed(
+                title="✅ ¡Tu Panel Monite está listo!",
+                description=(
+                    f"⏱ **Plan:** {dur_label}\n\n"
+                    f"🔑 **Tu Key de Panel Monite:**\n"
+                    f"```\n{key}\n```\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📋 **Certificado (instalación):** [Descargar]({_MONITE_CERT_URL})\n"
+                    f"🎬 **Tutorial de activación:** [Ver en YouTube]({_MONITE_TUTORIAL_URL})"
+                    f"{wa_line}\n\n"
+                    "¡Cualquier duda contactá a un admin! 🛡️"
+                ),
+                color=0xE67E22,
+            )
+            embed_key.set_footer(text="Marke Panel • Panel Monite — Free Fire")
+            await user.send(embed=embed_key)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"❌ No pude enviar DM. Key: `{key}` — enviásela manualmente.", ephemeral=True
+            )
+            return
+        except Exception:
+            log.exception("Error enviando key Monite por DM a %s", discord_id)
+            await interaction.followup.send(f"❌ Error DM. Key: `{key}`", ephemeral=True)
+            return
+
+        button.label = "✅ Key Monite Entregada"
+        button.disabled = True
+        button.style = discord.ButtonStyle.secondary
+        nuevo_contenido = (content or "") + f"\n\n✅ **Key entregada** por {interaction.user.mention}"
+        try:
+            await msg.edit(content=nuevo_contenido, view=self)
+        except Exception:
+            pass
+        await interaction.followup.send(
+            f"✅ Key `{key}` enviada por DM a <@{discord_id}> ({duration}).", ephemeral=True
+        )
+
+
+class MoniteNXIniciarPago(discord.ui.Button):
+    def __init__(self, pack, discord_id: str, user_id: int, username: str, channel_id: int):
+        super().__init__(label="Transferencia", style=discord.ButtonStyle.success, emoji="🇦🇷", row=0)
+        self.pack = pack; self.discord_id = discord_id; self.user_id = user_id
+        self.username = username; self.channel_id = channel_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await _safe_defer(interaction, ephemeral=True, thinking=False)
+        op_id = f"MNX-{random.randint(1000, 9999)}"
+        with _pending_binance_lock:
+            _pending_binance[op_id] = {
+                "discord_id": self.discord_id, "user_id": self.user_id,
+                "pack": self.pack, "channel_id": self.channel_id,
+                "username": self.username, "metodo": "NaranjaX",
+            }
+        try:
+            await asyncio.to_thread(
+                database.save_pending_payment,
+                payment_id=op_id, discord_id=self.discord_id, user_id=self.user_id,
+                pack_id=self.pack.id, channel_id=self.channel_id,
+                username=self.username, metodo="NaranjaX", extra_data="{}",
+            )
+        except Exception:
+            log.exception("No pude persistir pending monite NX %s", op_id)
+        embed = discord.Embed(
+            title="🟠 Pago vía Transferencia — Panel Monite",
+            description=(
+                f"**Operación:** `#{op_id}`\n\n"
+                f"Realizá una transferencia por **${self.pack.precio:,.0f} ARS**:\n\n"
+                f"🏦 **Plataforma:** Naranja X\n"
+                f"👤 **Alias:** `{NARANJA_X_ALIAS}`\n"
+                f"🔢 **CBU:** `{NARANJA_X_CBU}`\n"
+                f"🪪 **Titular:** Agustín Nahuel Marquesini\n\n"
+                "Una vez transferido, presioná **Subir Comprobante**."
+            ),
+            color=0xFF5A00,
+        )
+        if NARANJA_X_LOGO_URL:
+            embed.set_thumbnail(url=NARANJA_X_LOGO_URL)
+        embed.set_footer(text="Marke Panel • Panel Monite")
+        await interaction.followup.send(embed=embed, view=BinanceComprobanteView(op_id=op_id, user_id=self.user_id), ephemeral=True)
+
+
+class MoniteBNIniciarPago(discord.ui.Button):
+    def __init__(self, pack, discord_id: str, user_id: int, username: str, channel_id: int):
+        super().__init__(
+            label="Binance", style=discord.ButtonStyle.secondary,
+            emoji=discord.PartialEmoji(name="binance", id=1499205940220526642), row=0,
+        )
+        self.pack = pack; self.discord_id = discord_id; self.user_id = user_id
+        self.username = username; self.channel_id = channel_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await _safe_defer(interaction, ephemeral=True, thinking=False)
+        op_id = f"MNB-{random.randint(1000, 9999)}"
+        with _pending_binance_lock:
+            _pending_binance[op_id] = {
+                "discord_id": self.discord_id, "user_id": self.user_id,
+                "pack": self.pack, "channel_id": self.channel_id,
+                "username": self.username, "metodo": "Binance",
+            }
+        try:
+            await asyncio.to_thread(
+                database.save_pending_payment,
+                payment_id=op_id, discord_id=self.discord_id, user_id=self.user_id,
+                pack_id=self.pack.id, channel_id=self.channel_id,
+                username=self.username, metodo="Binance", extra_data="{}",
+            )
+        except Exception:
+            log.exception("No pude persistir pending monite BN %s", op_id)
+        embed = discord.Embed(
+            title="💰 Pago con Binance Pay — Panel Monite",
+            description=(
+                f"**Operación:** `#{op_id}`\n\n"
+                f"Transferí el equivalente a **${self.pack.precio:,.0f} ARS** en USDT:\n\n"
+                f"```\n{BINANCE_ID}\n```\n"
+                "Una vez que pagaste, presioná **Subir Comprobante**."
+            ),
+            color=0xF0B90B,
+        )
+        embed.set_footer(text="Marke Panel • Panel Monite")
+        await interaction.followup.send(embed=embed, view=BinanceComprobanteView(op_id=op_id, user_id=self.user_id), ephemeral=True)
+
+
+class MoniteMetodoPagoView(_SafeViewMixin, discord.ui.View):
+    def __init__(self, mp_url: str | None, pack, discord_id: str, user_id: int, username: str, channel_id: int):
+        super().__init__(timeout=None)
+        if MODO_AUTO_MP:
+            if mp_url:
+                self.add_item(discord.ui.Button(
+                    label="Mercado Pago", style=discord.ButtonStyle.link, url=mp_url,
+                    emoji=discord.PartialEmoji(name="mercadopago", id=1499197027903344811), row=0,
+                ))
+            else:
+                self.add_item(MPGenerarPagoButton(pack=pack, discord_id=discord_id, user_id=user_id, row=0))
+        self.add_item(MoniteNXIniciarPago(pack=pack, discord_id=discord_id, user_id=user_id, username=username, channel_id=channel_id))
+        self.add_item(MoniteBNIniciarPago(pack=pack, discord_id=discord_id, user_id=user_id, username=username, channel_id=channel_id))
+
+
+class MonitePackSelect(discord.ui.Select):
+    def __init__(self):
+        options = []
+        for p in payments.PACKS.values():
+            if p.categoria != "monite":
+                continue
+            dias = int(p.creditos)
+            options.append(discord.SelectOption(
+                label=f"📊 {p.nombre} — ${p.precio:,.0f} ARS",
+                description=f"Panel Monite {dias} día{'s' if dias != 1 else ''} — entrega automática",
+                value=p.id,
+            ))
+        super().__init__(
+            custom_id="monite_pack_select",
+            placeholder="Elegí la duración del Panel Monite...",
+            min_values=1, max_values=1, options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        pack_id = self.values[0]
+        pack = payments.PACKS[pack_id]
+        discord_id = str(interaction.user.id)
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+
+        mp_url: str | None = None
+        try:
+            pref = await asyncio.to_thread(payments.crear_preferencia, pack_id, discord_id)
+            mp_url = pref.get("init_point")
+        except Exception:
+            log.exception("Error creando pref MP monite pack=%s user=%s", pack_id, discord_id)
+
+        dias = int(pack.creditos)
+        embed = discord.Embed(
+            title=f"📊 Panel Monite — {pack.nombre}",
+            description=(
+                f"Precio: **${pack.precio:,.0f} ARS**\n"
+                f"⏱ Duración: **{dias} día{'s' if dias != 1 else ''}**\n\n"
+                "Elegí cómo querés pagar:"
+            ),
+            color=0xE67E22,
+        )
+        view = MoniteMetodoPagoView(
+            mp_url=mp_url, pack=pack, discord_id=discord_id,
+            user_id=interaction.user.id, username=interaction.user.display_name,
+            channel_id=interaction.channel_id,
+        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class MonitePackView(_SafeViewMixin, discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(MonitePackSelect())
+
+
+class MoniteCanalView(_SafeViewMixin, discord.ui.View):
+    """Vista persistente del canal Panel Monite con botones de plan."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _abrir_seleccion(self, interaction: discord.Interaction):
+        await _safe_defer(interaction, ephemeral=True, thinking=True)
+        embed = discord.Embed(
+            title="📊 Panel Monite — Elegí tu plan",
+            description=(
+                "Seleccioná la duración del Panel Monite que querés comprar.\n"
+                "La key se entrega **automáticamente** por DM al confirmar el pago. 🚀"
+            ),
+            color=0xE67E22,
+        )
+        await interaction.followup.send(embed=embed, view=MonitePackView(), ephemeral=True)
+
+    @discord.ui.button(label="⏱ 1 Día — $3.000", style=discord.ButtonStyle.primary, custom_id="monite_comprar_1d", row=0)
+    async def btn_1d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._abrir_seleccion(interaction)
+
+    @discord.ui.button(label="📅 7 Días — $8.000", style=discord.ButtonStyle.primary, custom_id="monite_comprar_7d", row=0)
+    async def btn_7d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._abrir_seleccion(interaction)
+
+    @discord.ui.button(label="🗓️ 30 Días — $18.000", style=discord.ButtonStyle.success, custom_id="monite_comprar_30d", row=0)
+    async def btn_30d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._abrir_seleccion(interaction)
+
+    @discord.ui.button(label="🤝 Plan Revendedor", style=discord.ButtonStyle.secondary, custom_id="monite_revendedor", row=1)
+    async def btn_revendedor(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket_ch = discord.utils.find(
+            lambda c: "ticket" in c.name.lower() or "crear" in c.name.lower(),
+            interaction.guild.text_channels if interaction.guild else [],
+        )
+        ticket_mention = ticket_ch.mention if ticket_ch else "#crear-ticket"
+        await interaction.response.send_message(
+            f"🤝 **Plan Revendedor — Panel Monite**\n"
+            f"Para consultar precios y condiciones del plan revendedor, "
+            f"abrí un ticket en {ticket_mention}. 📩",
+            ephemeral=True,
+        )
+
+
 class BypassInfoView(_SafeViewMixin, discord.ui.View):
     """View persistente del canal bypass-uid: botones Comprar y FREE."""
 
@@ -8100,6 +8496,185 @@ async def _setup_canal_bypass() -> None:
         log.warning("Sin permisos para purgar #bypass-uid")
     except Exception:
         log.exception("Error purgando #bypass-uid")
+
+
+CANAL_MONITE_ID: int = 0   # Se carga de DB config al iniciar (monite_canal_id)
+
+
+async def _setup_canal_monite() -> None:
+    """
+    Encuentra o crea el canal #panel-monite en la categoría 🛒 STORE,
+    configura permisos, postea el embed + video y purga mensajes no-embed.
+    """
+    global CANAL_MONITE_ID
+    await client.wait_until_ready()
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    # 1. Intentar encontrar canal ya conocido por ID en DB
+    canal_id_str = database.get_config("monite_canal_id")
+    channel: discord.TextChannel | None = None
+    if canal_id_str:
+        ch = client.get_channel(int(canal_id_str))
+        if isinstance(ch, discord.TextChannel):
+            channel = ch
+
+    # 2. Buscar por nombre
+    if channel is None:
+        for ch in guild.text_channels:
+            plain = ch.name.lower().replace("📊", "").replace("・", "").strip()
+            if "monite" in plain or "panel-monite" in plain:
+                channel = ch
+                break
+
+    # 3. Crear canal si no existe
+    if channel is None:
+        cat_store = await _obtener_o_crear_categoria(guild, _CAT_STORE)
+        try:
+            channel = await guild.create_text_channel(
+                "📊・panel-monite",
+                category=cat_store,
+                reason="Canal Panel Monite creado automáticamente — Marke Panel",
+            )
+            log.info("Canal #panel-monite creado (id=%s)", channel.id)
+        except Exception:
+            log.exception("No pude crear el canal #panel-monite")
+            return
+
+    # 4. Guardar ID en DB y global
+    database.set_config("monite_canal_id", str(channel.id))
+    CANAL_MONITE_ID = channel.id
+
+    # 5. Configurar permisos
+    rol_verificado = guild.get_role(ROL_VERIFICADO_ID)
+    bot_member     = guild.get_member(client.user.id)
+    try:
+        await channel.set_permissions(guild.default_role, view_channel=False, send_messages=False)
+        if rol_verificado:
+            await channel.set_permissions(
+                rol_verificado,
+                view_channel=True,
+                send_messages=True,
+                use_application_commands=True,
+                read_message_history=True,
+                create_public_threads=False,
+                create_private_threads=False,
+                send_messages_in_threads=False,
+                attach_files=False,
+                embed_links=False,
+                add_reactions=False,
+            )
+        if bot_member:
+            await channel.set_permissions(
+                bot_member,
+                view_channel=True, send_messages=True, manage_messages=True,
+                read_message_history=True, use_application_commands=True,
+                create_public_threads=True, send_messages_in_threads=True,
+                attach_files=True, embed_links=True,
+            )
+        if "📊" not in channel.name:
+            try:
+                await channel.edit(name="📊・panel-monite")
+            except Exception:
+                pass
+        log.info("Permisos de #panel-monite configurados (id=%s)", channel.id)
+    except discord.Forbidden:
+        log.warning("Sin permisos para modificar #panel-monite")
+    except Exception:
+        log.exception("Error configurando permisos de #panel-monite")
+
+    _MONITE_PANEL_VER = "monite_v1"
+
+    # 6. Postear embed — solo si no existe el embed actual
+    embed_encontrado = False
+    async for msg in channel.history(limit=30):
+        if msg.author == client.user and msg.embeds:
+            for e in msg.embeds:
+                if e.title and "Monite" in e.title and _MONITE_PANEL_VER in (e.footer.text or ""):
+                    embed_encontrado = True
+                    break
+            if not embed_encontrado:
+                for e in msg.embeds:
+                    if e.title and "Monite" in e.title and "panel" in (e.footer.text or "").lower():
+                        try:
+                            await msg.delete()
+                            log.info("Embed monite viejo borrado para repostear.")
+                        except Exception:
+                            pass
+                        break
+        if embed_encontrado:
+            break
+
+    if not embed_encontrado:
+        wa_url = database.get_config("monite_wa_url", "")
+        wa_field = f"\n🟢 **Grupo WhatsApp referencias:** {wa_url}" if wa_url else ""
+        embed = discord.Embed(
+            title="📊  Panel Monite — Free Fire",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**¿Qué trae el Panel Monite?**\n"
+                "🎯 **Aimbot** — cabeza y cuello\n"
+                "🔲 **ESP Líneas** — visualizá enemigos\n"
+                "⚡ **Unlock 120 FPS** — máxima fluidez\n"
+                "🎯 **Sin retroceso (No Recoil)**\n"
+                "📡 **Modo Stream** — transmití sin problemas\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**💰 Precios:**\n"
+                "📊 **1 Día** — $3.000 ARS\n"
+                "📊 **7 Días** — $8.000 ARS\n"
+                "📊 **30 Días** — $18.000 ARS\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**🎬 Tutorial de activación:**\n"
+                f"[▶️ Ver video en YouTube]({_MONITE_TUTORIAL_URL})\n\n"
+                f"**📋 Certificado (instalación iOS):**\n"
+                f"[📥 Descargar certificado]({_MONITE_CERT_URL})"
+                f"{wa_field}\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "**¿Cómo comprar?**\n"
+                "1️⃣ Presioná el botón de tu plan.\n"
+                "2️⃣ Elegí tu método de pago.\n"
+                "3️⃣ Recibís la key de activación por DM. 📩\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=0xE67E22,
+        )
+        embed.set_footer(text=f"Marke Panel • Panel Monite [{_MONITE_PANEL_VER}]")
+        video_path = "attached_assets/IMG_3708_1780900767725.mov"
+        try:
+            import os as _os
+            if _os.path.exists(video_path):
+                with open(video_path, "rb") as f_vid:
+                    await channel.send(
+                        file=discord.File(f_vid, filename="panel_monite_preview.mov"),
+                    )
+                log.info("Video de Monite enviado en #%s", channel.name)
+        except Exception:
+            log.exception("No pude enviar el video de Monite")
+        await channel.send(embed=embed, view=MoniteCanalView())
+        log.info("Embed de Panel Monite posteado en #%s", channel.name)
+
+    # 7. Purgar mensajes que no sean del bot
+    await asyncio.sleep(3)
+    try:
+        def _es_monite_bot(msg: discord.Message) -> bool:
+            if msg.author != client.user:
+                return False
+            if msg.embeds:
+                for e in msg.embeds:
+                    if e.title and "Monite" in e.title:
+                        return True
+            if msg.attachments:
+                return True
+            return False
+
+        deleted = await channel.purge(limit=300, check=lambda m: not _es_monite_bot(m), bulk=True)
+        if deleted:
+            log.info("Purga #panel-monite: %d mensaje(s) eliminado(s)", len(deleted))
+    except discord.Forbidden:
+        log.warning("Sin permisos para purgar #panel-monite")
+    except Exception:
+        log.exception("Error purgando #panel-monite")
 
 
 async def _configurar_canal_verificacion() -> None:
@@ -9801,6 +10376,178 @@ async def bypass_keys_historial_cmd(interaction: discord.Interaction):
 
 
 @tree.command(
+    name="monite-keys-cargar",
+    description="(Admin) Cargar keys de Panel Monite al stock",
+)
+@app_commands.describe(
+    duracion="Duración de las keys a cargar",
+    keys="Keys separadas por comas o líneas",
+)
+@app_commands.choices(duracion=[
+    app_commands.Choice(name="1 Día",   value="1d"),
+    app_commands.Choice(name="7 Días",  value="7d"),
+    app_commands.Choice(name="30 Días", value="30d"),
+])
+async def monite_keys_cargar_cmd(
+    interaction: discord.Interaction,
+    duracion: app_commands.Choice[str],
+    keys: str,
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    import re as _re
+    lista = [k.strip() for k in _re.split(r"[,;\n\r]+", keys) if k.strip()]
+    lista_valida = [k for k in lista if " " not in k]
+    invalidas = len(lista) - len(lista_valida)
+    if not lista_valida:
+        await interaction.followup.send("❌ No encontré ninguna key válida.", ephemeral=True)
+        return
+    agregadas = await asyncio.to_thread(database.add_monite_keys, lista_valida, duracion.value)
+    stock = await asyncio.to_thread(database.count_monite_keys)
+    aviso = f"\n⚠️ {invalidas} entradas descartadas (tenían espacios)." if invalidas else ""
+    await interaction.followup.send(
+        f"✅ **{agregadas} keys de {duracion.name} cargadas al stock de Panel Monite.**{aviso}\n\n"
+        f"📦 **Stock actual:**\n"
+        f"📊 1 Día — `{stock['1d']}` keys\n"
+        f"📊 7 Días — `{stock['7d']}` keys\n"
+        f"📊 30 Días — `{stock['30d']}` keys",
+        ephemeral=True,
+    )
+    log.info("monite-keys-cargar: %d keys (%s) cargadas por %s", agregadas, duracion.value, interaction.user)
+
+
+@tree.command(
+    name="monite-keys-stock",
+    description="(Admin) Ver el stock actual de keys de Panel Monite",
+)
+async def monite_keys_stock_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    stock = await asyncio.to_thread(database.count_monite_keys)
+    total = sum(stock.values())
+    embed = discord.Embed(
+        title="📦 Stock de Keys — Panel Monite",
+        description=(
+            f"📊 **1 Día** — `{stock['1d']}` keys disponibles\n"
+            f"📊 **7 Días** — `{stock['7d']}` keys disponibles\n"
+            f"📊 **30 Días** — `{stock['30d']}` keys disponibles\n\n"
+            f"**Total: `{total}` keys**"
+        ),
+        color=0xE67E22 if total > 0 else 0xE74C3C,
+    )
+    embed.set_footer(text="Marke Panel • Panel Monite — /monite-keys-cargar para agregar más")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(
+    name="monite-keys-limpiar",
+    description="(Admin) Borrar TODAS las keys no usadas de una duración (para recargar desde cero)",
+)
+@app_commands.describe(duracion="Duración cuyas keys querés borrar")
+@app_commands.choices(duracion=[
+    app_commands.Choice(name="1 Día",   value="1d"),
+    app_commands.Choice(name="7 Días",  value="7d"),
+    app_commands.Choice(name="30 Días", value="30d"),
+])
+async def monite_keys_limpiar_cmd(
+    interaction: discord.Interaction,
+    duracion: app_commands.Choice[str],
+):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    borradas = await asyncio.to_thread(database.clear_monite_keys, duracion.value)
+    stock = await asyncio.to_thread(database.count_monite_keys)
+    await interaction.followup.send(
+        f"🗑️ **{borradas} keys de {duracion.name} eliminadas del stock de Panel Monite.**\n\n"
+        f"📦 **Stock actual:**\n"
+        f"📊 1 Día — `{stock['1d']}` keys\n"
+        f"📊 7 Días — `{stock['7d']}` keys\n"
+        f"📊 30 Días — `{stock['30d']}` keys\n\n"
+        f"Cargá las keys correctas con `/monite-keys-cargar`.",
+        ephemeral=True,
+    )
+    log.info("monite-keys-limpiar: %d keys (%s) eliminadas por %s", borradas, duracion.value, interaction.user)
+
+
+@tree.command(
+    name="monite-keys-historial",
+    description="(Admin) Ver el historial de las últimas keys de Panel Monite entregadas",
+)
+async def monite_keys_historial_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    historial = await asyncio.to_thread(database.get_monite_key_history, 15)
+    stock = await asyncio.to_thread(database.count_monite_keys)
+    if not historial:
+        await interaction.followup.send(
+            "📭 No hay keys usadas en el historial aún.\n\n"
+            f"📦 **Stock disponible:** 1d=`{stock['1d']}` | 7d=`{stock['7d']}` | 30d=`{stock['30d']}`",
+            ephemeral=True,
+        )
+        return
+    dur_label = {"1d": "1 Día", "7d": "7 Días", "30d": "30 Días"}
+    lineas = []
+    for h in historial:
+        uid = f"<@{h['discord_id']}>" if h["discord_id"] else "—"
+        fecha = (h["used_at"] or "")[:16].replace("T", " ")
+        dur = dur_label.get(h["duration"], h["duration"])
+        lineas.append(f"• `{h['key_value'][:20]}…` | {dur} | {uid} | {fecha}")
+    embed = discord.Embed(
+        title="📋 Historial de Keys — Panel Monite (últimas 15)",
+        description="\n".join(lineas),
+        color=0x95A5A6,
+    )
+    embed.add_field(
+        name="📦 Stock actual",
+        value=f"📊 1 Día — `{stock['1d']}` keys\n📊 7 Días — `{stock['7d']}` keys\n📊 30 Días — `{stock['30d']}` keys",
+        inline=False,
+    )
+    embed.set_footer(text="Marke Panel • Solo visible para admins")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(
+    name="monite-set-whatsapp",
+    description="(Admin) Configurar el link del grupo de WhatsApp de referencias de Panel Monite",
+)
+@app_commands.describe(url="URL del grupo de WhatsApp (ej: https://chat.whatsapp.com/xxx)")
+async def monite_set_whatsapp_cmd(interaction: discord.Interaction, url: str):
+    await _safe_defer(interaction, ephemeral=True, thinking=False)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    database.set_config("monite_wa_url", url.strip())
+    await interaction.followup.send(
+        f"✅ Link de WhatsApp de Panel Monite guardado:\n{url.strip()}\n\n"
+        "Se incluirá en las keys que se entreguen a partir de ahora.\n"
+        "Para actualizar el canal, usá `/actualizar-canal-monite`.",
+        ephemeral=True,
+    )
+
+
+@tree.command(
+    name="actualizar-canal-monite",
+    description="(Admin) Reposter el embed del canal Panel Monite desde cero",
+)
+async def actualizar_canal_monite_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True, thinking=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    database.set_config("monite_canal_id", "")
+    asyncio.create_task(_setup_canal_monite())
+    await interaction.followup.send("♻️ Actualizando canal **#panel-monite**...", ephemeral=True)
+
+
+@tree.command(
     name="perfil-admin",
     description="(Admin) Ver el perfil de afiliado completo de cualquier usuario",
 )
@@ -10333,6 +11080,9 @@ async def on_ready():
     client.add_view(BypassInfoView())
     client.add_view(BypassPackView())
     client.add_view(BypassApproveView())
+    client.add_view(MoniteCanalView())
+    client.add_view(MonitePackView())
+    client.add_view(MoniteApproveView())
     asyncio.create_task(_actualizar_perfil())
     asyncio.create_task(_configurar_canal_verificacion())
     asyncio.create_task(_postear_verificacion())
@@ -10350,6 +11100,7 @@ async def on_ready():
     asyncio.create_task(_setup_canal_ios())
     asyncio.create_task(_setup_canal_bypass())
     asyncio.create_task(_setup_canal_flourite())
+    asyncio.create_task(_setup_canal_monite())
     asyncio.create_task(_setup_canal_diamantes())
     asyncio.create_task(_setup_canal_chat())
     asyncio.create_task(_setup_canal_metodos_pago())
@@ -10963,6 +11714,43 @@ def _notificar_pago(
                 )
                 await _enviar_entrega_ios(user, pack)
 
+            elif pack.categoria == "monite":
+                dias_mn_mp     = int(pack.creditos)
+                duration_mn_mp = f"{dias_mn_mp}d"
+                auto_ok_mn_mp  = await _entregar_monite_key_auto(
+                    user, discord_id, duration_mn_mp, pack.nombre, payment_id, "Mercado Pago",
+                )
+                if not auto_ok_mn_mp:
+                    embed_mn = discord.Embed(
+                        title="✅ ¡Pago aprobado! — Panel Monite",
+                        description=(
+                            f"Recibimos tu pago del plan **{pack.nombre}**.\n\n"
+                            f"⏱ **Duración:** {dias_mn_mp} día{'s' if dias_mn_mp != 1 else ''}\n\n"
+                            "Tu key de Panel Monite está siendo preparada. "
+                            "Te la enviamos por este chat en breve. 📩\n\n"
+                            "¡Gracias por tu compra en **Sensi Marke**! 📊"
+                        ),
+                        color=0xE67E22,
+                    )
+                    embed_mn.set_footer(text="Marke Panel • Panel Monite — Free Fire")
+                    try:
+                        await user.send(embed=embed_mn)
+                    except discord.Forbidden:
+                        log.warning("No pude enviar DM monite a %s — DM bloqueado", discord_id)
+                    try:
+                        canal_ventas = await _obtener_canal_ventas()
+                        if canal_ventas:
+                            await canal_ventas.send(
+                                f"📊 **PANEL MONITE — ENTREGA REQUERIDA** ⚠️ (sin stock automático)\n"
+                                f"Usuario: <@{discord_id}> (`{discord_id}`)\n"
+                                f"Pack: **{pack.nombre}** ({duration_mn_mp}) — ${pack.precio:,.0f} ARS\n"
+                                f"Pago: **Mercado Pago** ✅\n"
+                                f"Presioná el botón para entregar la key.",
+                                view=MoniteApproveView(),
+                            )
+                    except Exception:
+                        log.exception("No pude notificar monite en ventas para %s", discord_id)
+
             elif pack.categoria == "bypass":
                 # Bypass-UID → intentar entrega automática desde stock, si no hay → botón manual
                 ff_id_bypass = database.get_bypass_order_ff_id(discord_id, pack.id)
@@ -11144,6 +11932,7 @@ def main() -> None:
 
     database.init_db()
     database.init_pg_bypass_keys()
+    database.init_pg_monite_keys()
 
     flask_app = webhook_server.create_app(_notificar_pago, _whatsapp_a_discord)
     t = threading.Thread(
