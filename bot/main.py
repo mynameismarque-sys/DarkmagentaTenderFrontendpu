@@ -8566,7 +8566,7 @@ async def _setup_canal_monite() -> None:
     except Exception:
         log.exception("Error configurando permisos de #panel-monite")
 
-    _MONITE_PANEL_VER = "monite_v2"
+    _MONITE_PANEL_VER = "monite_v3"
 
     # 6. Postear embed — solo si no existe el embed actual
     embed_encontrado = False
@@ -8628,13 +8628,17 @@ async def _setup_canal_monite() -> None:
             if _os.path.exists(video_path):
                 with open(video_path, "rb") as f_vid:
                     await channel.send(
+                        embed=embed,
                         file=discord.File(f_vid, filename="panel_monite_preview.mov"),
+                        view=MoniteCanalView(),
                     )
-                log.info("Video de Monite enviado en #%s", channel.name)
+                log.info("Embed + video de Monite enviados en #%s", channel.name)
+            else:
+                await channel.send(embed=embed, view=MoniteCanalView())
+                log.info("Embed de Panel Monite posteado en #%s (sin video)", channel.name)
         except Exception:
-            log.exception("No pude enviar el video de Monite")
-        await channel.send(embed=embed, view=MoniteCanalView())
-        log.info("Embed de Panel Monite posteado en #%s", channel.name)
+            log.exception("No pude postear embed/video de Monite")
+            await channel.send(embed=embed, view=MoniteCanalView())
 
     # 7. Purgar mensajes que no sean del bot
     await asyncio.sleep(3)
