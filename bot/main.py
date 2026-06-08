@@ -8566,7 +8566,7 @@ async def _setup_canal_monite() -> None:
     except Exception:
         log.exception("Error configurando permisos de #panel-monite")
 
-    _MONITE_PANEL_VER = "monite_v3"
+    _MONITE_PANEL_VER = "monite_v4"
 
     # 6. Postear embed — solo si no existe el embed actual
     embed_encontrado = False
@@ -8622,23 +8622,21 @@ async def _setup_canal_monite() -> None:
             color=0xE67E22,
         )
         embed.set_footer(text=f"Marke Panel • Panel Monite [{_MONITE_PANEL_VER}]")
+        # Embed primero, video después como mensaje separado (Discord siempre pone
+        # los adjuntos encima del embed si están en el mismo mensaje).
+        await channel.send(embed=embed, view=MoniteCanalView())
+        log.info("Embed de Panel Monite posteado en #%s", channel.name)
         video_path = "attached_assets/IMG_3708_1780900767725.mov"
         try:
             import os as _os
             if _os.path.exists(video_path):
                 with open(video_path, "rb") as f_vid:
                     await channel.send(
-                        embed=embed,
                         file=discord.File(f_vid, filename="panel_monite_preview.mov"),
-                        view=MoniteCanalView(),
                     )
-                log.info("Embed + video de Monite enviados en #%s", channel.name)
-            else:
-                await channel.send(embed=embed, view=MoniteCanalView())
-                log.info("Embed de Panel Monite posteado en #%s (sin video)", channel.name)
+                log.info("Video de Monite enviado en #%s", channel.name)
         except Exception:
-            log.exception("No pude postear embed/video de Monite")
-            await channel.send(embed=embed, view=MoniteCanalView())
+            log.exception("No pude enviar el video de Monite")
 
     # 7. Purgar mensajes que no sean del bot
     await asyncio.sleep(3)
