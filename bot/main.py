@@ -10655,7 +10655,7 @@ _BUMP_CANALES: list[dict] = [
 
 
 async def _bump_canal_unico(canal_info: dict) -> None:
-    """Postea bump en un canal eliminando el anterior."""
+    """Postea bump en un canal: copia el embed original del canal, agrega métodos de pago y borra el bump anterior."""
     guild = _resolver_guild()
     if guild is None:
         return
@@ -10673,16 +10673,54 @@ async def _bump_canal_unico(canal_info: dict) -> None:
         return
 
     prev_id_str = database.get_config(canal_info["bump_id_key"])
-    if prev_id_str:
+    prev_id = int(prev_id_str) if prev_id_str else None
+
+    # Buscar el embed original del canal (el más antiguo del bot, ignorando el bump previo)
+    original_embed: discord.Embed | None = None
+    try:
+        async for msg in canal.history(limit=100, oldest_first=True):
+            if msg.author == client.user and msg.embeds:
+                if prev_id and msg.id == prev_id:
+                    continue
+                original_embed = msg.embeds[0]
+                break
+    except Exception:
+        log.exception("Error buscando embed original en #%s", canal.name)
+
+    # Construir embed del bump
+    if original_embed is not None:
+        embed_dict = original_embed.to_dict()
+        # Quitar field de pagos anterior si ya existía (evitar duplicados en ciclos)
+        if "fields" in embed_dict:
+            embed_dict["fields"] = [
+                f for f in embed_dict["fields"]
+                if "Pagás con" not in f.get("name", "") and "Pagás con" not in f.get("value", "")
+            ]
+        else:
+            embed_dict["fields"] = []
+        embed_dict["fields"].append({
+            "name": "💳 Métodos de pago",
+            "value": (
+                "🇦🇷🇲🇽🇧🇷🇨🇱🇨🇴🇺🇾🇵🇪 Mercado Pago  ·  🌍 Binance Pay  ·  🏦 Transferencia ARG"
+            ),
+            "inline": False,
+        })
+        new_embed = discord.Embed.from_dict(embed_dict)
+    else:
+        # Fallback si el canal todavía no tiene embed (ej: recién creado)
+        new_embed = canal_info["embed_fn"]()
+
+    # Borrar bump anterior
+    if prev_id:
         try:
-            prev_msg = await canal.fetch_message(int(prev_id_str))
+            prev_msg = await canal.fetch_message(prev_id)
             await prev_msg.delete()
         except Exception:
             pass
 
-    embed = canal_info["embed_fn"]()
+    # Postear nuevo bump
     try:
-        msg = await canal.send(embed=embed)
+        msg = await canal.send(embed=new_embed)
         database.set_config(canal_info["bump_id_key"], str(msg.id))
         log.info("Bump enviado en #%s (msg_id=%s)", canal.name, msg.id)
     except Exception:
