@@ -10580,21 +10580,24 @@ def _bump_embed_bypass() -> discord.Embed:
     return e
 
 
-def _bump_embed_flourite() -> discord.Embed:
+def _bump_embed_proxy() -> discord.Embed:
     e = discord.Embed(
-        title="🔮 Flourite iOS — Panel Free Fire para iPhone",
+        title="🔑 Proxy FF — Jugá Free Fire en cualquier dispositivo",
         description=(
-            "El panel definitivo para **Free Fire en iOS**. **Sin Jailbreak.** 📱✅\n"
-            "Aimbot, ESP, Silent Aim, 120 FPS y mucho más.\n\n"
-            "🎯 Aimbot · 🔇 Silent Aim · 👁️ Chams/ESP · ⚡ Fast Shoot · 📱 120 FPS\n\n"
+            "Conectate con nuestro **Proxy** y jugá **Free Fire** en iPhone, iPad, Android o PC.\n"
+            "Key activada con tu IP, entrega **automática por DM**. ⚡\n\n"
+            "📱 iOS · 🤖 Android · 🖥️ PC · ✅ Sin ban\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📅 **Mensual** — $36.000 ARS\n"
+            "⏱️ **1 Día** — $2.500 ARS\n"
+            "🗓️ **7 Días** — $7.000 ARS\n"
+            "📆 **15 Días** — $10.000 ARS\n"
+            "📅 **30 Días** — $16.500 ARS\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             + _PAGOS_MUNDIALES
         ),
-        color=0x9B59B6,
+        color=0x5865F2,
     )
-    e.set_footer(text="👆 Abrí un ticket para coordinar tu compra · Marke Panel")
+    e.set_footer(text="👆 Usá el botón de arriba para comprar · Marke Panel")
     return e
 
 
@@ -10635,11 +10638,11 @@ _BUMP_CANALES: list[dict] = [
         "bump_id_key": "bump_last_msg_bypass",
     },
     {
-        "nombre": "flourite",
+        "nombre": "proxy",
         "config_key": None,
-        "find_name": "flourite",
-        "embed_fn": _bump_embed_flourite,
-        "bump_id_key": "bump_last_msg_flourite",
+        "find_name": "proxy",
+        "embed_fn": _bump_embed_proxy,
+        "bump_id_key": "bump_last_msg_proxy",
     },
     {
         "nombre": "diamantes",
