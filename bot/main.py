@@ -10531,6 +10531,251 @@ async def actualizar_canal_monite_cmd(interaction: discord.Interaction):
     await interaction.followup.send("♻️ Actualizando canal **#panel-monite**...", ephemeral=True)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# BUMP AUTOMÁTICO — RECORDATORIO EN CANALES DE PRODUCTOS
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PAGOS_MUNDIALES = (
+    "💳 **Pagás con:** 🇦🇷🇲🇽🇧🇷🇨🇱🇨🇴🇺🇾🇵🇪 Mercado Pago  ·  🌍 Binance Pay  ·  🏦 Transferencia ARG"
+)
+
+
+def _bump_embed_monite() -> discord.Embed:
+    e = discord.Embed(
+        title="📊 Panel Monite — ¿Ya lo probaste?",
+        description=(
+            "El panel más completo para **Free Fire** con todo activado.\n"
+            "Comprá tu key y te llega **automáticamente por DM** en segundos. ⚡\n\n"
+            "🎯 Aimbot · 👁️ ESP · 🔫 No Recoil · 🎬 Stream Mode · 📱 120 FPS\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⏱️ **1 Día** — $3.000 ARS\n"
+            "🗓️ **7 Días** — $8.000 ARS\n"
+            "📅 **30 Días** — $18.000 ARS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            + _PAGOS_MUNDIALES
+        ),
+        color=0xE67E22,
+    )
+    e.set_footer(text="👆 Usá el selector de arriba para comprar · Marke Panel")
+    return e
+
+
+def _bump_embed_bypass() -> discord.Embed:
+    e = discord.Embed(
+        title="🖥️ Bypass-UID — Free Fire en PC sin ban",
+        description=(
+            "Jugá **Free Fire desde tu PC** con bypass activo y sin riesgo de ban.\n"
+            "Key entregada **automáticamente por DM** al pagar. ⚡\n\n"
+            "🛡️ Modo TELA · 🖥️ Modo NORMAL · ✅ Sin ban\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⏱️ **1 Día** — $2.500 ARS\n"
+            "🗓️ **7 Días** — $7.000 ARS\n"
+            "📅 **30 Días** — $14.000 ARS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            + _PAGOS_MUNDIALES
+        ),
+        color=0x1ABC9C,
+    )
+    e.set_footer(text="👆 Usá el selector de arriba para comprar · Marke Panel")
+    return e
+
+
+def _bump_embed_flourite() -> discord.Embed:
+    e = discord.Embed(
+        title="🔮 Flourite iOS — Panel Free Fire para iPhone",
+        description=(
+            "El panel definitivo para **Free Fire en iOS**. **Sin Jailbreak.** 📱✅\n"
+            "Aimbot, ESP, Silent Aim, 120 FPS y mucho más.\n\n"
+            "🎯 Aimbot · 🔇 Silent Aim · 👁️ Chams/ESP · ⚡ Fast Shoot · 📱 120 FPS\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📅 **Mensual** — $36.000 ARS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            + _PAGOS_MUNDIALES
+        ),
+        color=0x9B59B6,
+    )
+    e.set_footer(text="👆 Abrí un ticket para coordinar tu compra · Marke Panel")
+    return e
+
+
+def _bump_embed_diamantes() -> discord.Embed:
+    e = discord.Embed(
+        title="💎 Diamantes Free Fire — Precios más bajos",
+        description=(
+            "Cargá **Diamantes** en tu cuenta al precio más bajo del mercado.\n"
+            "Entrega directa, rápida y segura. 💯\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💎 **110 Diamonds** — $1.450 ARS\n"
+            "💎 **341 Diamonds** — $4.250 ARS\n"
+            "💎 **572 Diamonds** — $7.100 ARS\n"
+            "💎 **1.166 Diamonds** — $14.000 ARS\n"
+            "💎 **2.398 Diamonds** — $25.700 ARS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            + _PAGOS_MUNDIALES
+        ),
+        color=0x3498DB,
+    )
+    e.set_footer(text="👆 Tocá el botón de arriba para comprar · Marke Panel")
+    return e
+
+
+_BUMP_CANALES: list[dict] = [
+    {
+        "nombre": "monite",
+        "config_key": "monite_canal_id",
+        "find_name": "monite",
+        "embed_fn": _bump_embed_monite,
+        "bump_id_key": "bump_last_msg_monite",
+    },
+    {
+        "nombre": "bypass",
+        "config_key": "bypass_canal_id",
+        "find_name": "bypass",
+        "embed_fn": _bump_embed_bypass,
+        "bump_id_key": "bump_last_msg_bypass",
+    },
+    {
+        "nombre": "flourite",
+        "config_key": None,
+        "find_name": "flourite",
+        "embed_fn": _bump_embed_flourite,
+        "bump_id_key": "bump_last_msg_flourite",
+    },
+    {
+        "nombre": "diamantes",
+        "config_key": None,
+        "find_name": "diamante",
+        "embed_fn": _bump_embed_diamantes,
+        "bump_id_key": "bump_last_msg_diamantes",
+    },
+]
+
+
+async def _bump_canal_unico(canal_info: dict) -> None:
+    """Postea bump en un canal eliminando el anterior."""
+    guild = _resolver_guild()
+    if guild is None:
+        return
+
+    canal: discord.TextChannel | None = None
+    if canal_info.get("config_key"):
+        id_str = database.get_config(canal_info["config_key"])
+        if id_str:
+            canal = client.get_channel(int(id_str))  # type: ignore[assignment]
+    if canal is None:
+        find_name = canal_info["find_name"]
+        canal = next((c for c in guild.text_channels if find_name in c.name.lower()), None)
+    if canal is None:
+        log.debug("Bump: canal '%s' no encontrado.", canal_info["nombre"])
+        return
+
+    prev_id_str = database.get_config(canal_info["bump_id_key"])
+    if prev_id_str:
+        try:
+            prev_msg = await canal.fetch_message(int(prev_id_str))
+            await prev_msg.delete()
+        except Exception:
+            pass
+
+    embed = canal_info["embed_fn"]()
+    try:
+        msg = await canal.send(embed=embed)
+        database.set_config(canal_info["bump_id_key"], str(msg.id))
+        log.info("Bump enviado en #%s (msg_id=%s)", canal.name, msg.id)
+    except Exception:
+        log.exception("Error enviando bump en #%s", canal.name)
+
+
+async def _tarea_bumps_canales() -> None:
+    """Loop: cada N horas postea un recordatorio en cada canal de producto, escalonado."""
+    await client.wait_until_ready()
+    await asyncio.sleep(600)
+
+    while True:
+        try:
+            habilitado = database.get_config("bumps_enabled", "1") == "1"
+            if not habilitado:
+                await asyncio.sleep(60)
+                continue
+
+            intervalo_mins = int(database.get_config("bumps_intervalo_mins", "300"))
+            n = len(_BUMP_CANALES)
+            stagger_secs = max(60, (intervalo_mins * 60) // n)
+
+            for canal_info in _BUMP_CANALES:
+                try:
+                    await _bump_canal_unico(canal_info)
+                except Exception:
+                    log.exception("Error en bump canal '%s'", canal_info["nombre"])
+                await asyncio.sleep(stagger_secs)
+
+            ya_esperados = stagger_secs * n
+            resta = max(0, intervalo_mins * 60 - ya_esperados)
+            await asyncio.sleep(resta)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Error en _tarea_bumps_canales, reintentando en 5 min.")
+            await asyncio.sleep(300)
+
+
+@tree.command(
+    name="bumps-activar",
+    description="(Admin) Activa los recordatorios automáticos en canales de productos",
+)
+async def bumps_activar_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    database.set_config("bumps_enabled", "1")
+    mins = int(database.get_config("bumps_intervalo_mins", "300"))
+    horas = mins // 60
+    stagger = mins // len(_BUMP_CANALES)
+    await interaction.followup.send(
+        f"✅ **Bumps activados.**\n"
+        f"Ciclo cada **{horas}h** · {len(_BUMP_CANALES)} canales con **{stagger} min** de diferencia entre cada uno.\n"
+        f"Canales: {', '.join('#' + c['nombre'] for c in _BUMP_CANALES)}",
+        ephemeral=True,
+    )
+
+
+@tree.command(
+    name="bumps-desactivar",
+    description="(Admin) Desactiva los recordatorios automáticos en canales de productos",
+)
+async def bumps_desactivar_cmd(interaction: discord.Interaction):
+    await _safe_defer(interaction, ephemeral=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    database.set_config("bumps_enabled", "0")
+    await interaction.followup.send("⏸️ Bumps desactivados.", ephemeral=True)
+
+
+@tree.command(
+    name="bumps-intervalo",
+    description="(Admin) Cambia el intervalo de bumps automáticos (en horas, 1-24)",
+)
+@app_commands.describe(horas="Horas entre ciclos completos (ej: 5)")
+async def bumps_intervalo_cmd(interaction: discord.Interaction, horas: int):
+    await _safe_defer(interaction, ephemeral=True)
+    if not _puede_registrar(interaction):
+        await interaction.followup.send("❌ Solo administradores.", ephemeral=True)
+        return
+    if not (1 <= horas <= 24):
+        await interaction.followup.send("❌ El intervalo debe estar entre 1 y 24 horas.", ephemeral=True)
+        return
+    database.set_config("bumps_intervalo_mins", str(horas * 60))
+    stagger = (horas * 60) // len(_BUMP_CANALES)
+    await interaction.followup.send(
+        f"✅ Intervalo actualizado: **{horas}h** por ciclo completo.\n"
+        f"Cada canal se bumpeará con **{stagger} min** de diferencia.",
+        ephemeral=True,
+    )
+
+
 @tree.command(
     name="perfil-admin",
     description="(Admin) Ver el perfil de afiliado completo de cualquier usuario",
@@ -11100,6 +11345,7 @@ async def on_ready():
     asyncio.create_task(_purgar_mensajes_usuario("poya"))
     asyncio.create_task(_banear_usuarios_por_nombre("poya"))
     asyncio.create_task(_deshabilitar_gratis_en_1h())
+    asyncio.create_task(_tarea_bumps_canales())
     # Recuperar operaciones pendientes que sobrevivieron al reinicio.
     # Restauramos TANTO _pending_binance como _waiting_comprobante (este último
     # se perdía antes en cada reinicio, dejando comprobantes de DM ignorados).
