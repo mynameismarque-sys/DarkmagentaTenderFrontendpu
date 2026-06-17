@@ -11660,6 +11660,7 @@ def _notificar_pago(
     pack: payments.Pack,
     total_creditos: float,
     amount: float = 0.0,
+    payment_id: str = "",
 ) -> None:
     """Llamado desde Flask cuando se aprueba un pago. Envía DM al usuario y publica en #ventas."""
     if not client.is_ready():

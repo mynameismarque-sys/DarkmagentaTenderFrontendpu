@@ -160,7 +160,7 @@ def create_app(notify_callback, whatsapp_callback=None) -> Flask:
             )
 
             try:
-                notify_callback(discord_id, pack, nuevo_total, amount)
+                notify_callback(discord_id, pack, nuevo_total, amount, pid_str)
             except Exception:  # noqa: BLE001
                 log.exception("💳 MP pago %s — falló la notificación a Discord para %s", payment_id, discord_id)
 
